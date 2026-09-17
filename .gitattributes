@@ -1,0 +1,13 @@
+# TNDDOS line-ending policy
+# Source and docs stay LF so the tree is identical on every platform.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries
+*.img binary
+*.fd binary
+*.efi binary

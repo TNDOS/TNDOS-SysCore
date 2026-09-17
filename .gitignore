@@ -1,0 +1,14 @@
+﻿# TNDDOS 构建产物：ESP 目录树 / FAT16 磁盘映像 / 串口日志 / OVMF 变量存储
+/build/
+
+# 磁盘映像、日志、固件
+*.img
+*.log
+*.fd
+*.bundle
+
+# 编辑器
+.vs/
+.vscode/
+*.swp
+*~
