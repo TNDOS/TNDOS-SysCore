@@ -1,0 +1,230 @@
+﻿# ============================================================================
+# TNDDOS 构建 + 启动验证
+#
+#   .\tools\build-run.ps1                     编译 -> 组 ESP -> 造 FAT16 盘 -> QEMU/OVMF -> 打印串口日志
+#   .\tools\build-run.ps1 -NoRun              只编译，不启动
+#   .\tools\build-run.ps1 -ShowEnv            只打印工具链定位结果，退出
+#   .\tools\build-run.ps1 -Seconds 60 -Keys 'h,e,l,p,ret'
+#   .\tools\build-run.ps1 -Fat vvfat          退回 QEMU 的 vvfat（写操作会崩，仅供对照）
+#
+# 工具链一律从环境变量取，脚本里不写死任何机器相关的路径。
+# 取不到就先自动探测（PATH，以及 QEMU 自带的 share 目录），再取不到就报错，
+# 并且直接把「该设哪个变量、怎么设」打印出来。
+#
+#   TNDDOS_LLVM_BIN    含 clang.exe 的目录
+#   TNDDOS_QEMU        qemu-system-x86_64.exe 完整路径
+#   TNDDOS_OVMF_CODE   OVMF 代码固件 (*.fd)
+#   TNDDOS_OVMF_VARS   OVMF 变量存储模板 (*.fd)
+# ============================================================================
+param(
+    [int]$Seconds = 30,
+    [switch]$NoRun,
+    [string]$Keys = '',
+    [int]$Warmup = 10,
+    [ValidateSet('image','vvfat')][string]$Fat = 'image',
+    [switch]$ShowEnv
+)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
+# ------------------------------------------------------------ 定位辅助函数
+
+function Get-EnvPath([string]$Name) {
+    $v = [Environment]::GetEnvironmentVariable($Name)
+    if (-not $v) { return $null }
+    if (-not (Test-Path -LiteralPath $v)) {
+        throw ("环境变量 " + $Name + " 指向的路径不存在：`n    " + $v + "`n请修正它，或删掉这个变量改用自动探测。")
+    }
+    return (Get-Item -LiteralPath $v).FullName
+}
+
+function How-To([string]$Name, [string]$Example) {
+    return ("请设置环境变量 " + $Name + "，然后重开一个终端：`n" +
+            "    setx " + $Name + ' "' + $Example + '"')
+}
+
+# ------------------------------------------------------------------ clang
+# TNDDOS_LLVM_BIN 给的是目录（含 clang.exe），不是 exe 本身
+$LLVM_BIN = Get-EnvPath 'TNDDOS_LLVM_BIN'
+if ($LLVM_BIN) {
+    if (-not (Test-Path -LiteralPath (Join-Path $LLVM_BIN 'clang.exe'))) {
+        throw ("TNDDOS_LLVM_BIN 里没有 clang.exe：`n" + $LLVM_BIN)
+    }
+} else {
+    $c = Get-Command clang.exe -ErrorAction SilentlyContinue
+    if ($c) {
+        $LLVM_BIN = Split-Path -Parent $c.Source
+    } else {
+        throw ("找不到 clang.exe（TNDDOS_LLVM_BIN 未设置，PATH 上也没有）。`n" +
+               (How-To 'TNDDOS_LLVM_BIN' 'D:\LLVM\bin'))
+    }
+}
+
+# ------------------------------------------------------------------- QEMU
+$QEMU = Get-EnvPath 'TNDDOS_QEMU'
+if ($QEMU) {
+    if ((Split-Path -Leaf $QEMU) -notmatch '^qemu-system-') {
+        Write-Host ("  提示：TNDDOS_QEMU 指向的不是 qemu-system-*.exe：" + $QEMU)
+    }
+} else {
+    $q = Get-Command qemu-system-x86_64.exe -ErrorAction SilentlyContinue
+    if ($q) {
+        $QEMU = $q.Source
+    } else {
+        throw ("找不到 qemu-system-x86_64.exe（TNDDOS_QEMU 未设置，PATH 上也没有）。`n" +
+               (How-To 'TNDDOS_QEMU' 'D:\qemu\qemu-system-x86_64.exe'))
+    }
+}
+
+# ------------------------------------------------------------------- OVMF
+# 取不到就去 QEMU 自己的 share\ 目录里翻 —— 发行版通常把固件放那儿
+function Find-Ovmf([string]$EnvName, [string]$FileName) {
+    $v = Get-EnvPath $EnvName
+    if ($v) { return $v }
+    $dir = Split-Path -Parent $QEMU
+    $cands = @(
+        (Join-Path $dir ('share\' + $FileName)),
+        (Join-Path $dir $FileName),
+        (Join-Path (Split-Path -Parent $dir) ('share\' + $FileName))
+    )
+    foreach ($cand in $cands) {
+        if (Test-Path -LiteralPath $cand) { return (Get-Item -LiteralPath $cand).FullName }
+    }
+    throw ("在 QEMU 目录里也没找到 OVMF 固件 " + $FileName + "。`n" +
+           (How-To $EnvName ((Join-Path $dir ('share\' + $FileName)))))
+}
+
+$OVMF_CODE     = Find-Ovmf 'TNDDOS_OVMF_CODE' 'edk2-x86_64-code.fd'
+$OVMF_VARS_SRC = Find-Ovmf 'TNDDOS_OVMF_VARS' 'edk2-i386-vars.fd'
+
+# --------------------------------------------------------------- 目录结构
+$Root = Split-Path -Parent $PSScriptRoot          # 脚本在 <root>\tools\ 下
+$Build   = Join-Path $Root 'build'
+$Esp     = Join-Path $Build 'esp'
+$BootDir = Join-Path $Esp 'EFI\BOOT'
+$TndDir  = Join-Path $Esp 'EFI\TNDOS'
+$Vars    = Join-Path $Build 'OVMF_VARS.fd'
+$Serial  = Join-Path $Build 'serial.log'
+$QemuErr = Join-Path $Build 'qemu_err.txt'
+$EspImg  = Join-Path $Build 'esp.img'
+$Inc     = Join-Path $Root 'src\include'
+
+if ($ShowEnv) {
+    Write-Host '=== TNDDOS 工具链定位结果 ==='
+    Write-Host ("  clang      " + (Join-Path $LLVM_BIN 'clang.exe'))
+    Write-Host ("  qemu       " + $QEMU)
+    Write-Host ("  OVMF code  " + $OVMF_CODE)
+    Write-Host ("  OVMF vars  " + $OVMF_VARS_SRC)
+    Write-Host ("  仓库根     " + $Root)
+    Write-Host ("  构建输出   " + $Build)
+    exit 0
+}
+
+Write-Host '=== TNDDOS 工具链 ==='
+Write-Host ("  clang      " + $LLVM_BIN)
+Write-Host ("  qemu       " + $QEMU)
+Write-Host ("  OVMF       " + (Split-Path -Parent $OVMF_CODE))
+
+if (Test-Path $Esp) { Remove-Item $Esp -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $BootDir, $TndDir | Out-Null
+if (-not (Test-Path $Vars)) { Copy-Item $OVMF_VARS_SRC $Vars -Force }
+
+function Build-Pe([string[]]$Src, [string]$Out) {
+    $S = @($Src | Where-Object { Test-Path $_ })
+    if ($S.Count -eq 0) { Write-Host ("  [skip] " + (Split-Path $Out -Leaf) + "  (无源文件)"); return }
+    Write-Host ("  [ cc ] " + (Split-Path $Out -Leaf) + "   <- " + (($S | ForEach-Object { Split-Path $_ -Leaf }) -join ', '))
+    $a = @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fshort-wchar','-nostdlib',
+           '-fno-stack-protector','-mno-red-zone','-Wall',
+           '-Wl,/subsystem:efi_application,/entry:efi_main','-Wl,/machine:x64',
+           '-I', $Inc) + $S + @('-o', $Out)
+    & (Join-Path $LLVM_BIN 'clang.exe') @a
+    if ($LASTEXITCODE -ne 0) { throw ("clang 编译失败: " + $Out) }
+    Write-Host ("         -> " + (Get-Item $Out).Length + " bytes")
+}
+
+$LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\status.c','src\lib\file.c','src\lib\guid.c') |
+          ForEach-Object { Join-Path $Root $_ }
+
+Write-Host '=== TNDDOS build ==='
+Build-Pe (@((Join-Path $Root 'src\boot\bootx64.c')) + $LibSrc) (Join-Path $BootDir 'BOOTX64.EFI')
+Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
+            (Join-Path $Root 'src\kernel\module.c'),
+            (Join-Path $Root 'src\kernel\vfs.c'),
+            (Join-Path $Root 'src\kernel\pmm.c'),
+            (Join-Path $Root 'src\kernel\heap.c'),
+            (Join-Path $Root 'src\kernel\drv.c'),
+            (Join-Path $Root 'src\kernel\conf.c'),
+            (Join-Path $Root 'src\kernel\shell.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
+
+# 驱动：每个都是独立的 UEFI 映像，落到 \EFI\TNDOS\DRIVERS\
+$DrvDir = Join-Path $TndDir 'DRIVERS'
+New-Item -ItemType Directory -Force -Path $DrvDir | Out-Null
+foreach ($d in 'vga','kbd') {
+    Build-Pe @((Join-Path $Root ("src\drv\" + $d + ".c")),
+               (Join-Path $Root 'src\drv\drvlib.c'),
+               (Join-Path $Root 'src\lib\utf8.c')) (Join-Path $DrvDir ($d.ToUpper() + '.EFI'))
+}
+
+foreach ($f in 'efidos.sys','config.sys','autoexec.bat','HELLO.TXT') {
+    $s = Join-Path $Root (Join-Path 'boot' $f)
+    if (Test-Path $s) { Copy-Item $s (Join-Path $TndDir $f) -Force; Write-Host ("  [ cp ] " + $f) }
+}
+Write-Host ("  ESP  -> " + $Esp)
+
+# 生成真实 FAT16 磁盘映像（QEMU 的 vvfat 在写回时会崩，见 mkfat.ps1 顶部）
+if ($Fat -eq 'image') {
+    & (Join-Path $Root 'tools\mkfat.ps1') -Source $Esp -Out $EspImg
+}
+
+if ($NoRun) { Write-Host '=== -NoRun: 跳过启动 ==='; exit 0 }
+
+Remove-Item $Serial, $QemuErr -ErrorAction SilentlyContinue
+
+Write-Host ("=== QEMU / OVMF 启动 (headless, " + $Seconds + "s) ===")
+$a = @('-machine','q35','-m','256','-display','none',
+       '-serial',("file:" + $Serial),
+       '-monitor','tcp:127.0.0.1:5557,server,nowait',
+       '-drive',('if=pflash,format=raw,readonly=on,file=' + ($OVMF_CODE -replace '\\','/')),
+       '-drive',('if=pflash,format=raw,file=' + ($Vars -replace '\\','/')),
+       '-drive',$(if ($Fat -eq 'image') { 'format=raw,file=' + ($EspImg -replace '\\','/') } else { 'format=raw,file=fat:rw:' + ($Esp -replace '\\','/') }),
+       '-no-reboot')
+$p = Start-Process -FilePath $QEMU -ArgumentList $a -PassThru -NoNewWindow -RedirectStandardError $QemuErr
+
+if ($Keys) {
+    Write-Host ("  等待 " + $Warmup + "s 到提示符，然后注入按键: " + $Keys)
+    Start-Sleep -Seconds $Warmup
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $c.Connect('127.0.0.1', 5557)
+        $w = New-Object System.IO.StreamWriter($c.GetStream())
+        $w.AutoFlush = $true
+        foreach ($k in ($Keys -split ',')) {
+            $w.WriteLine('sendkey ' + $k.Trim())
+            Start-Sleep -Milliseconds 150
+        }
+        Start-Sleep -Seconds 3
+        $w.Close(); $c.Close()
+        Write-Host '  按键注入完成'
+    } catch { Write-Host ('  按键注入失败: ' + $_.Exception.Message) }
+    $rest = $Seconds - $Warmup - 4
+    if ($rest -lt 1) { $rest = 1 }
+    Start-Sleep -Seconds $rest
+} else {
+    Start-Sleep -Seconds $Seconds
+}
+
+if (-not $p.HasExited) { $p.Kill(); Write-Host '  (到时，已终止 QEMU)' }
+Start-Sleep -Milliseconds 500
+
+Write-Host '=== 串口日志 (build\serial.log) ==='
+if (Test-Path $Serial) {
+    $t = Get-Content $Serial -Raw -Encoding UTF8
+    $t = $t -replace "\x1b\[[0-9;]*[A-Za-z]",""
+    $t = $t -replace "\x1b\[[0-9;]*=",""
+    $t
+} else { Write-Host '(没有产生 serial.log)' }
+
+if ((Test-Path $QemuErr) -and (Get-Item $QemuErr).Length -gt 0) {
+    Write-Host '=== QEMU stderr ==='
+    Get-Content $QemuErr -Raw
+}

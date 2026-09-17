@@ -1,0 +1,12 @@
+; ============================================================================
+; TNDDOS user configuration -- config.sys
+;
+; Entirely up to the user. Same syntax as efidos.sys, but loaded after it,
+; so anything set here overrides the system defaults.
+; ============================================================================
+
+REM Sample entries, edit as needed
+DEVICE=KBD.EFI
+FILES=40
+SET TMP=C:\TMP
+SET TNDOS_USER=1

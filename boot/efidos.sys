@@ -1,0 +1,19 @@
+; ============================================================================
+; TNDDOS system configuration -- efidos.sys
+;
+; Deployed by the installer. This is the SYSTEM level config and is loaded
+; BEFORE the user's config.sys. Syntax is identical to classic config.sys.
+; Users are not meant to edit this file.
+;
+; Position is roughly that of MSDOS.SYS in DOS 7, but what it carries is
+; driver and boot parameters.
+; ============================================================================
+
+SHELL=\EFI\TNDOS\SHELL.EFI
+FILES=30
+BUFFERS=20
+LASTDRIVE=Z
+DEVICE=VGA.EFI
+SET TNDOS_SYSTEM=1
+SET TNDOS_ROOT=C:\TNDOS
+SET PATH=C:\;C:\TNDOS;C:\BIN

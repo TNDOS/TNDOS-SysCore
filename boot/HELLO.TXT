@@ -1,0 +1,10 @@
+TNDDOS / 2NDDOS
+================
+
+This file exists to prove the TNDDOS VFS layer really reads files
+through the UEFI Simple File System Protocol.
+
+TNDDOS is not DOS ported to UEFI. It is a new DOS for the UEFI era:
+it keeps the DOS interaction model and drops the DOS memory model.
+
+Mounted:  C:  ->  ESP root  (UEFI Simple File System / FAT16)
