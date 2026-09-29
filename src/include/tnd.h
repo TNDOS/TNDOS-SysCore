@@ -6,10 +6,26 @@
 
 #include "efi.h"
 #include "tnd_utf8.h"
+#include "tnx.h"
+
+/* ---------------------------------------------------------------- 地址图
+ * 在此之前 TNDDOS 没有地址规划：PMM 从 1MB 起首次适配地发页，
+ * 内核被固件扔在 ~221MB，谁也不管谁。TNX 强制固定加载地址，这张图就躲不掉了。
+ *
+ *   0x0000000000000000 - 0x00000000000FFFFF   保留（实模式 / BIOS 遗迹）
+ *   0x0000000000100000 - 0x0000000000FFFFFF   PMM 常规分配区（内核堆在这里长）
+ *   0x0000000001000000 - 0x00000000017FFFFF   TNX 程序映像窗口（固定，PMM 永不发放）
+ *   0x0000000001800000 - .....................  其余交给 PMM
+ *
+ * 窗口由 PMM 在初始化时就占住（标位图 + 真向固件 AllocatePages），
+ * 否则堆会先把它吃掉，加载程序就永远失败。
+ */
+#define TNX_IMAGE_BASE   0x0000000001000000ULL   /* 16 MiB */
+#define TNX_WINDOW_SIZE  0x0000000000800000ULL   /*  8 MiB，窗口 16MiB..24MiB */
 
 #define TND_NAME    "TNDDOS"
 #define TND_ALIAS   "2NDDOS"
-#define TND_VERSION "0.3.0-m4"
+#define TND_VERSION "0.3.1-M3"
 
 /* 系统文件布局：除 BOOTX64.EFI 外全部在 \EFI\TNDOS\ */
 #define TND_DIR        "\\EFI\\TNDOS"
@@ -49,6 +65,7 @@ extern const TND_MODULE_DEF gModVfs;
 extern const TND_MODULE_DEF gModPmm;
 extern const TND_MODULE_DEF gModHeap;
 extern const TND_MODULE_DEF gModDrv;
+extern const TND_MODULE_DEF gModTnx;
 extern const TND_MODULE_DEF gModConf;
 
 void module_init_all(void);
@@ -62,6 +79,13 @@ void drv_report(void);
 int  drv_count(void);
 int  drv_ok_count(void);
 
+/* ============================ TNX 加载器 ================================= */
+int  tnx_init(void);
+EFI_STATUS tnx_load(const char *path, int *outCode, int verbose);
+int  tnx_info(const char *path);
+int  tnx_find(const char *name, char *out, UINTN cap);
+void tnx_report(void);
+
 /* ============================ 日志 / 控制台 =============================== */
 void log_init(EFI_SYSTEM_TABLE *st);
 void log_puts(const char *s);
@@ -74,6 +98,7 @@ void log_kv_u64(const char *k, UINT64 v);
 void con_puts(const char *s);
 void con_putc(char c);
 void con_u64(UINT64 v);
+void con_hex(UINT64 v);
 void con_clear(void);
 void con_kv(const char *k, UINT64 v, const char *unit);   /* 对齐的 "标签 : 数字 单位" */
 
@@ -109,6 +134,7 @@ char vfs_drive(void);
 EFI_STATUS vfs_resolve(const char *dos, char *out, UINTN cap);
 EFI_STATUS vfs_open(const char *dos, int write, EFI_FILE_PROTOCOL **out);
 EFI_STATUS vfs_read_all(const char *dos, char *buf, UINTN cap, UINTN *len);
+int  vfs_exists(const char *dos);
 int  vfs_dir(const char *dos);
 int  vfs_type(const char *dos);
 int  vfs_mkdir(const char *dos);
@@ -140,6 +166,7 @@ UINT64 pmm_alloc_page(void);
 UINT64 pmm_alloc_pages(UINTN count);
 void   pmm_free_page(UINT64 addr);
 void   pmm_free_pages(UINT64 addr, UINTN count);
+void   pmm_reserve(UINT64 base, UINTN pages);
 int    pmm_selftest(void);
 
 /* ============================ 内核堆（M3） =============================== */

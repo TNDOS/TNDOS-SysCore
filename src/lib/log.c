@@ -61,6 +61,13 @@ void con_u64(UINT64 v) { char b[24]; t_utoa(v, b); con_puts(b); }
 
 void con_clear(void) { if (gOut && gOut->ClearScreen) gOut->ClearScreen(gOut); }
 
+/* 0x + 16 位十六进制，和 log_hex 对齐。地址一律用它，别再内联写循环。 */
+void con_hex(UINT64 v) {
+    const char *hx = "0123456789ABCDEF";
+    con_puts("0x");
+    for (int i = 15; i >= 0; i--) con_putc(hx[(v >> (i * 4)) & 0xF]);
+}
+
 /* 对齐的 "标签 : 数字 单位"。标签宽度按字节算，所以标签请用 ASCII。 */
 void con_kv(const char *k, UINT64 v, const char *unit) {
     con_puts("  ");

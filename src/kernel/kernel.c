@@ -92,6 +92,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     /* ---- 5.5) driver load results (DEVICE= already ran during config parsing) ---- */
     drv_report();
 
+    /* ---- 5.6) TNX image window ---- */
+    tnx_report();
+
     con_puts("\r\n");
     env_dump();
 

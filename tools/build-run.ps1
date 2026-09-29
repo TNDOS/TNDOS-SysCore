@@ -97,6 +97,22 @@ function Find-Ovmf([string]$EnvName, [string]$FileName) {
 $OVMF_CODE     = Find-Ovmf 'TNDDOS_OVMF_CODE' 'edk2-x86_64-code.fd'
 $OVMF_VARS_SRC = Find-Ovmf 'TNDDOS_OVMF_VARS' 'edk2-i386-vars.fd'
 
+# --------------------------------------------------------- TNDOS-ToolsKit
+# tnxpack（ELF64 -> TNX）和 mkfat（目录 -> FAT16 映像）住在 ToolKit 仓库里，
+# 不放在本仓库 —— 它们和操作系统的生命周期不同，而且 SDK 也要用同一份。
+$TOOLKIT = Get-EnvPath 'TNDDOS_TOOLKIT'
+if ($TOOLKIT) {
+    foreach ($t in 'tnxpack.ps1','mkfat.ps1') {
+        if (-not (Test-Path -LiteralPath (Join-Path $TOOLKIT $t))) {
+            throw ("TNDDOS_TOOLKIT 里没有 " + $t + "：" + $TOOLKIT)
+        }
+    }
+} else {
+    throw ("找不到 TNDOS-ToolsKit（TNDDOS_TOOLKIT 未设置）。" + [char]10 +
+           (How-To 'TNDDOS_TOOLKIT' 'D:\TNDOS-ToolsKit') + [char]10 +
+           "它提供 tnxpack.ps1 / mkfat.ps1 —— TNX 打包器和 FAT16 映像生成器。")
+}
+
 # --------------------------------------------------------------- 目录结构
 $Root = Split-Path -Parent $PSScriptRoot          # 脚本在 <root>\tools\ 下
 $Build   = Join-Path $Root 'build'
@@ -115,6 +131,7 @@ if ($ShowEnv) {
     Write-Host ("  qemu       " + $QEMU)
     Write-Host ("  OVMF code  " + $OVMF_CODE)
     Write-Host ("  OVMF vars  " + $OVMF_VARS_SRC)
+    Write-Host ("  ToolKit    " + $TOOLKIT)
     Write-Host ("  仓库根     " + $Root)
     Write-Host ("  构建输出   " + $Build)
     exit 0
@@ -124,6 +141,7 @@ Write-Host '=== TNDDOS 工具链 ==='
 Write-Host ("  clang      " + $LLVM_BIN)
 Write-Host ("  qemu       " + $QEMU)
 Write-Host ("  OVMF       " + (Split-Path -Parent $OVMF_CODE))
+Write-Host ("  ToolKit    " + $TOOLKIT)
 
 if (Test-Path $Esp) { Remove-Item $Esp -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $BootDir, $TndDir | Out-Null
@@ -153,6 +171,7 @@ Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
             (Join-Path $Root 'src\kernel\pmm.c'),
             (Join-Path $Root 'src\kernel\heap.c'),
             (Join-Path $Root 'src\kernel\drv.c'),
+            (Join-Path $Root 'src\kernel\tnx.c'),
             (Join-Path $Root 'src\kernel\conf.c'),
             (Join-Path $Root 'src\kernel\shell.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
 
@@ -165,6 +184,34 @@ foreach ($d in 'vga','kbd') {
                (Join-Path $Root 'src\lib\utf8.c')) (Join-Path $DrvDir ($d.ToUpper() + '.EFI'))
 }
 
+# ---------------------------------------------------------------------------
+# TNX 示例程序：clang -> ELF64 -> ld.lld -> tnxpack -> TNX
+# TNX 不需要自己的编译器和链接器，工具链还是 clang / lld，
+# tnxpack 只负责最后一步（ELF64 -> TNX）。
+# ---------------------------------------------------------------------------
+$TnxSrc = Join-Path $Root 'src\tnx'
+$TnxOut = Join-Path $Build 'tnx'
+New-Item -ItemType Directory -Force -Path $TnxOut | Out-Null
+
+foreach ($c in 'tndrt','hello') {
+    Write-Host ("  [tnx] " + $c + ".c   -> " + $c + ".o")
+    $ta = @('-target','x86_64-unknown-none','-ffreestanding','-fno-builtin','-fno-stack-protector',
+            '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',$TnxSrc,
+            '-c',(Join-Path $TnxSrc ($c + '.c')),'-o',(Join-Path $TnxOut ($c + '.o')))
+    & (Join-Path $LLVM_BIN 'clang.exe') @ta
+    if ($LASTEXITCODE -ne 0) { throw ("clang 编译 TNX 程序失败: " + $c + ".c") }
+}
+
+$lld = Join-Path $LLVM_BIN 'ld.lld.exe'
+if (-not (Test-Path $lld)) { throw ("找不到 ld.lld.exe：" + $lld) }
+Write-Host '  [tnx] ld.lld      -> hello.elf'
+$la = @('-m','elf_x86_64','-T',(Join-Path $TnxSrc 'tnx.ld'),'-o',(Join-Path $TnxOut 'hello.elf'),
+        (Join-Path $TnxOut 'tndrt.o'),(Join-Path $TnxOut 'hello.o'))
+& $lld @la
+if ($LASTEXITCODE -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
+
+& (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
+
 foreach ($f in 'efidos.sys','config.sys','autoexec.bat','HELLO.TXT') {
     $s = Join-Path $Root (Join-Path 'boot' $f)
     if (Test-Path $s) { Copy-Item $s (Join-Path $TndDir $f) -Force; Write-Host ("  [ cp ] " + $f) }
@@ -173,7 +220,7 @@ Write-Host ("  ESP  -> " + $Esp)
 
 # 生成真实 FAT16 磁盘映像（QEMU 的 vvfat 在写回时会崩，见 mkfat.ps1 顶部）
 if ($Fat -eq 'image') {
-    & (Join-Path $Root 'tools\mkfat.ps1') -Source $Esp -Out $EspImg
+    & (Join-Path $TOOLKIT 'mkfat.ps1') -Source $Esp -Out $EspImg
 }
 
 if ($NoRun) { Write-Host '=== -NoRun: 跳过启动 ==='; exit 0 }

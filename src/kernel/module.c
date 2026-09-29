@@ -15,6 +15,7 @@ static const TND_MODULE_DEF *gMods[] = {
     &gModPmm,
     &gModHeap,
     &gModDrv,
+    &gModTnx,
     &gModConf
 };
 

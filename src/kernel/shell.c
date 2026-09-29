@@ -124,6 +124,9 @@ static void cmd_help(void) {
     con_puts("    MODULES           list kernel modules and status\r\n");
     con_puts("    DRIVERS           list loaded drivers\r\n");
     con_puts("    LOAD <file>       load a UEFI image (~= load fs0:\\<file>)\r\n");
+    con_puts("    <prog>            run a TNX program by name (extension optional)\r\n");
+    con_puts("    TNX <file.tnx>    dump header + section table, do NOT run it\r\n");
+    con_puts("    TNXRUN <file>     run it with full loader trace\r\n");
     con_puts("    REBOOT / SHUTDOWN reset / power off (UEFI ResetSystem)\r\n");
     con_puts("\r\n");
 }
@@ -172,6 +175,18 @@ void shell_exec_line(char *line) {
     if (!t_stricmp(cmd, "MEM"))     { cmd_mem(); return; }
     if (!t_stricmp(cmd, "MEMTEST")) { cmd_memtest(); return; }
     if (!t_stricmp(cmd, "MODULES")) { module_report(); return; }
+    /* TNX = 查看；TNXRUN = 带加载器跟踪地执行。
+     * 想"直接跑"就敲程序名本身，见本函数末尾。 */
+    if (!t_stricmp(cmd, "TNX") || !t_stricmp(cmd, "TNXINFO")) {
+        if (!*arg) { con_puts("  usage: TNX <file.tnx>     dump header + section table (does not run)\r\n"); return; }
+        tnx_info(arg);
+        return;
+    }
+    if (!t_stricmp(cmd, "TNXRUN")) {
+        if (!*arg) { con_puts("  usage: TNXRUN <file.tnx>  run with full loader trace\r\n"); return; }
+        tnx_load(arg, 0, 1);
+        return;
+    }
     if (!t_stricmp(cmd, "DRIVERS")) { drv_report(); return; }
     if (!t_stricmp(cmd, "LOAD")) {
         if (!*arg) { con_puts("  usage: LOAD <driver file>\r\n"); return; }
@@ -224,8 +239,19 @@ void shell_exec_line(char *line) {
         return;
     }
 
-    con_puts("  Unknown command: "); con_puts(cmd); con_puts("    type HELP for the command list\r\n");
-    log_puts("[log] unknown command: "); log_puts(cmd); log_puts("\r\n");
+    /* 不是内建命令 —— 按 DOS 的规矩当成程序名去找、去跑。
+     * 找的顺序：当前目录 -> PATH 每一项；名字没扩展名就补 .TNX。 */
+    {
+        char prog[TND_MAX_PATH];
+        if (tnx_find(cmd, prog, sizeof(prog))) {
+            if (*arg) con_puts("  (note: command-line arguments are not passed to TNX programs yet)\r\n");
+            tnx_load(prog, 0, 0);      /* verbose = 0：只留程序自己的输出 */
+            return;
+        }
+    }
+
+    con_puts("  Bad command or file name\r\n");
+    log_puts("[log] bad command: "); log_puts(cmd); log_puts("\r\n");
 }
 
 /* --------------------------------------------------------- run a batch */

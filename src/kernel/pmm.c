@@ -124,11 +124,20 @@ int pmm_init(void) {
         if (!BIT_GET(i)) BIT_SET(i);
     }
 
+    /* 预留 TNX 程序映像窗口。
+     * 必须在这里就占住：否则内核堆的首次适配会先把它吃掉，
+     * 之后每次加载 TNX 都会失败 —— 而且失败原因看起来跟"内存不够"一模一样。
+     *
+     * 注意 gReady 必须先置位：pmm_reserve 开头有 gReady 检查，
+     * 放在它后面的话这次预留会**静默地什么都不做** ——
+     * 位图上看不出来，只有等到堆长到那个地址才炸。 */
+    gReady = 1;
+    pmm_reserve(TNX_IMAGE_BASE, (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
+
     gFreePages = 0; gUsedPages = 0;
     for (i = 0; i < gTotalPages; i++) { if (BIT_GET(i)) gUsedPages++; else gFreePages++; }
 
     gEnv.BS->FreePool(map);
-    gReady = 1;
 
     log_kv_u64("pmm.totalPages", gTotalPages);
     log_kv_u64("pmm.managedPages", gManagedPages);
@@ -210,6 +219,28 @@ void pmm_free_pages(UINT64 addr, UINTN count) {
 }
 
 void pmm_free_page(UINT64 addr) { pmm_free_pages(addr, 1); }
+
+/* 把一段物理区间永久占住：既标位图（PMM 自己不再发放），
+ * 也真的向固件 AllocatePages（固件不再拿去另作他用）。
+ * 固件拒绝也没关系 —— 位图那边已经标死了，我们不会重复发放。 */
+void pmm_reserve(UINT64 base, UINTN pages) {
+    if (!gReady) return;
+    {
+        EFI_PHYSICAL_ADDRESS at = (EFI_PHYSICAL_ADDRESS)base;
+        EFI_STATUS s = gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, pages, &at);
+        if (EFI_ERROR(s) || at != (EFI_PHYSICAL_ADDRESS)base) {
+            log_puts("[log] pmm: reserve "); log_hex(base);
+            log_puts(" via AllocatePages failed, bitmap only\r\n");
+        }
+    }
+    UINT64 first = base >> PMM_PAGE_SHIFT;
+    for (UINTN k = 0; k < pages; k++) {
+        UINT64 pg = first + k;
+        if (pg < gTotalPages && !BIT_GET(pg)) { BIT_SET(pg); gFreePages--; gUsedPages++; }
+    }
+    log_puts("[log] pmm: reserved "); log_u64((UINT64)pages);
+    log_puts(" pages @ "); log_hex(base); log_puts("\r\n");
+}
 
 /* Self-test: really take pages, fill with a pattern, read back, give them back.
  * Also checks the returned address is page aligned. */

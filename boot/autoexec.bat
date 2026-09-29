@@ -27,6 +27,18 @@ dir TMP
 del TMP\COPY.TXT
 rd TMP
 echo.
+echo   --- TNX: just type the program name, like DOS ---
+HELLO.TNX
+echo.
+echo   --- extension is optional ---
+HELLO
+echo.
+echo   --- TNX <file> inspects, does not run ---
+tnx HELLO.TNX
+echo.
+echo   --- unknown program name ---
+NOPE.TNX
+echo.
 echo   --- Memory self-test ---
 memtest
 echo.

@@ -135,6 +135,13 @@ EFI_STATUS vfs_open(const char *dos, int write, EFI_FILE_PROTOCOL **out) {
     return s;
 }
 
+int vfs_exists(const char *dos) {
+    EFI_FILE_PROTOCOL *f = 0;
+    if (EFI_ERROR(vfs_open(dos, 0, &f)) || !f) return 0;
+    f->Close(f);
+    return 1;
+}
+
 EFI_STATUS vfs_read_all(const char *dos, char *buf, UINTN cap, UINTN *len) {
     EFI_FILE_PROTOCOL *f = 0;
     EFI_STATUS s;

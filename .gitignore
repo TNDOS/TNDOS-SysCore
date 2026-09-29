@@ -1,6 +1,9 @@
 ﻿# TNDDOS 构建产物：ESP 目录树 / FAT16 磁盘映像 / 串口日志 / OVMF 变量存储
 /build/
 
+# 同级仓库的暂存目录（SDK / ToolKit 各自有独立的 .git，不属于本仓库）
+/repos/
+
 # 磁盘映像、日志、固件
 *.img
 *.log
