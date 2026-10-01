@@ -226,11 +226,11 @@ if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 & (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
 
 # ---------------------------------------------------------------------------
-# 外部命令（TNDOS-Commands）—— 工具是 TNX 程序，已经构建好了，这里只负责部署
+# 外部命令（TNDOS-SysAPP）—— 工具是 TNX 程序，已经构建好了，这里只负责部署
 # ---------------------------------------------------------------------------
-$CMDS = Get-EnvPath 'TNDDOS_COMMANDS'
+$CMDS = Get-EnvPath 'TNDDOS_SYSAPP'
 if (-not $CMDS) {
-    foreach ($guess in @((Join-Path $Root 'repos\TNDOS-Commands'), (Join-Path (Split-Path -Parent $Root) 'TNDOS-Commands'))) {
+    foreach ($guess in @((Join-Path $Root 'repos\TNDOS-SysAPP'), (Join-Path (Split-Path -Parent $Root) 'TNDOS-SysAPP'))) {
         if (Test-Path $guess) { $CMDS = $guess; break }
     }
 }
@@ -242,7 +242,7 @@ if ($CMDS -and (Test-Path (Join-Path $CMDS 'bin'))) {
     }
     Write-Host ("  [cmd] " + $n + " external command(s)   <- " + (Split-Path $CMDS -Leaf))
 } else {
-    Write-Host "  [cmd] TNDOS-Commands 未找到，跳过外部命令（设 TNDDOS_COMMANDS 指定）"
+    Write-Host "  [cmd] TNDOS-SysAPP 未找到，跳过外部命令（设 TNDDOS_SYSAPP 指定）"
 }
 
 # ---------------------------------------------------------------------------
