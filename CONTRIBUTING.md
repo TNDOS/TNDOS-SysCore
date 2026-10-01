@@ -102,3 +102,24 @@ Windows PowerShell 5.1 没有 BOM 就按 ANSI 读文件，
 `tools/build-run.ps1` 一键完成：编译 -> 组 ESP -> 造 FAT16 映像 -> QEMU/OVMF 启动 -> 打印串口日志。
 
 `tnxdump -Validate` 可以在不启动 QEMU 的情况下校验一个 TNX —— 构建流水线里优先用它。
+---
+
+## 9. 版本号跟着发布走 / Version numbers follow releases
+
+**规则：一条 Release 交出去之后，再往主线加功能就要推进版本号。**
+
+理由很具体：源码归档是按 tag 存的。如果 tag `v0.3.2` 指向的源码里写着
+`TND_VERSION "0.3.1-M3"`，那下载 0.3.2 源码的人编译出来会得到一个
+**自称 0.3.1 的二进制** —— 二进制和源码对不上，出问题无从查起。
+
+所以顺序是：
+
+```
+1. 改 TND_VERSION 为目标版本，提交      <- 先改版本号
+2. 打 tag 并推送
+3. CI 自动建 Release（.github/workflows/release.yml）
+4. 人工把构建产物传到那条 Release 上
+```
+
+**不要反过来**（先打 tag、之后再补版本号）。那样 tag 指向的源码是错的，
+而且 tag 一旦推上去就不该再动 —— 动它等于悄悄换掉别人已经下载过的东西。
