@@ -16,6 +16,10 @@ void log_init(EFI_SYSTEM_TABLE *st) {
             gSer = (EFI_SERIAL_IO_PROTOCOL *)ser;
     }
     gEnv.Ser = gSer;
+
+    /* 把光标打开。固件的默认状态不保证是"可见"，
+     * 而一个看不见光标的屏幕在 EDIT 里根本没法用。 */
+    if (gOut && gOut->EnableCursor) gOut->EnableCursor(gOut, 1);
 }
 
 static void ser_raw(const char *s) {
@@ -98,6 +102,16 @@ void con_set_attr(UINTN attr) {
 }
 
 void con_reset_attr(void) { con_set_attr(0x07); }   /* 浅灰 on 黑，和 DOS 默认一致 */
+
+/* 光标显隐。之前内核从来没碰过它，结果就是**屏幕上没有光标** ——
+ * 在 Shell 里还能忍（有提示符），在 EDIT 里就是灾难：不知道字会插到哪。
+ *
+ * 注意：UEFI 文本模式**不提供设置光标形状**的接口，所以 DOS 那种
+ * "下划线闪烁 / Ins 后变成整块"没法照搬。固件给什么形状就是什么形状，
+ * 想要整块只能自己用反白画（EDIT 就是这么做的）。 */
+void con_cursor(int visible) {
+    if (gOut && gOut->EnableCursor) gOut->EnableCursor(gOut, visible ? 1 : 0);
+}
 
 void con_u64(UINT64 v) { char b[24]; t_utoa(v, b); con_puts(b); }
 

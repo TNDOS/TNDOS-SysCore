@@ -157,7 +157,14 @@ Write-Host ("  ToolKit    " + $TOOLKIT)
 
 if (Test-Path $Esp) { Remove-Item $Esp -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $BootDir, $TndDir | Out-Null
-if (-not (Test-Path $Vars)) { Copy-Item $OVMF_VARS_SRC $Vars -Force }
+# 每次都用全新的 VARS，不要"存在就留着"。
+#
+# OVMF 会把引导顺序存回 NVRAM。一旦它曾经没找到可引导的东西、回落到内置的
+# UEFI Shell，**那个选择会被持久化** —— 之后每次启动都起 Shell，
+# 而不是我们的 ESP。症状是屏幕上出现 "UEFI Interactive Shell v2.2"，
+# 看起来像 ESP 坏了，其实是 NVRAM 记着上次的结果。
+# 构建脚本要的是确定性，不是记住上一次。
+Copy-Item $OVMF_VARS_SRC $Vars -Force
 
 function Build-Pe([string[]]$Src, [string]$Out) {
     $S = @($Src | Where-Object { Test-Path $_ })

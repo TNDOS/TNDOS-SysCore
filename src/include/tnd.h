@@ -110,6 +110,7 @@ void con_putc(char c);
 void con_write(const char *s, UINTN n);
 void con_set_attr(UINTN attr);
 void con_reset_attr(void);
+void con_cursor(int visible);
 void con_u64(UINT64 v);
 void con_hex(UINT64 v);
 void con_clear(void);
@@ -136,6 +137,7 @@ const char *t_status_str(EFI_STATUS s);
 /* ============================ 文件（UEFI 层） ============================ */
 EFI_STATUS t_open_root(EFI_HANDLE image);
 EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen);
+EFI_STATUS t_read_file_alloc(const char *name, void **buf, UINTN *len);
 
 /* ============================ VFS（M2） ================================== */
 #define VFS_SEEK_SET 0

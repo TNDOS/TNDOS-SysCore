@@ -63,6 +63,7 @@ int  tnd_cols(void);
 int  tnd_rows(void);
 void tnd_setattr(int attr);   /* TND_ATTR(fg, bg)，颜色常量见 tnd_api.h */
 int  tnd_getattr(void);
+void tnd_cursor(int visible);   /* UEFI 只能显隐，形状由固件决定 */
 
 /* --- 内存 / 时间 --- */
 void   *tnd_alloc(tnd_size n);

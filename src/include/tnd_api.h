@@ -40,7 +40,11 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020200u
+#define TND_API_VERSION 0x00020300u
+
+/* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
+ * 没法照搬，固件给什么形状就是什么形状。
+ * 想要整块只能自己用反白画（EDIT 的覆盖模式就是这么做的）。 */
 
 /* ------------------------------------------------------------ 颜色
  * UEFI 的 EFI_TEXT_ATTR(fg, bg) 就是 fg | (bg << 4) —— 和 DOS 的 VGA
@@ -177,6 +181,9 @@ typedef struct {
     /* --- 颜色（v2.2 追加）--- */
     void (*TND_ABI setattr)(int attr);   /* TND_ATTR(fg, bg) */
     int  (*TND_ABI getattr)(void);
+
+    /* --- 光标（v2.3 追加）--- */
+    void (*TND_ABI cursor)(int visible);
 
 } TND_API_TABLE;
 

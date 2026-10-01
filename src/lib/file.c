@@ -65,12 +65,77 @@ EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen) {
     if (outLen) *outLen = total;
     log_puts("[log] read "); log_u64(total); log_puts(" bytes <- "); log_puts(name); log_puts("\r\n");
 
-    /* 缓冲满 = 文件被截断。绝不能让这种事静默发生：
-     * 上次 kernel.efi 被砍掉 1.5KB，LoadImage 只回了一个没头没脑的 Unsupported。 */
-    if (total + 1 >= cap && cap > 0 && buf[total - 1] != 0) {
+    /* 缓冲填满 = 文件可能被截断。绝不能让这种事静默发生：
+     * 上次 kernel.efi 被砍掉 1.5KB，LoadImage 只回了一个没头没脑的 Unsupported。
+     *
+     * 注意这里**只判断"填满了"**。早先的版本还加了 buf[total-1] != 0
+     * 来避免"文件刚好 cap-1 字节"的误报 —— 结果是只要截断点那个字节
+     * 恰好是 0x00（PE 文件里到处都是），这个检查就永远不触发。
+     * 一个会自己静默掉的"响亮报错"，比没有更危险。 */
+    if (total + 1 >= cap) {
         log_puts("[log] !! buffer full, file may be truncated: "); log_puts(name);
         log_puts("  (cap="); log_u64(cap); log_puts(")\r\n");
         return EFI_BUFFER_TOO_SMALL;
     }
+    return EFI_SUCCESS;
+}
+
+/* 按文件实际大小分配并读入，调用方用 FreePool 释放。
+ *
+ * **不要**再用固定上限：那个数字迟早会被超过（这个坑踩过两次，
+ * 第一次 16KB -> 17920，第二次 64KB -> 66048，两次的症状一模一样：
+ * LoadImage 回一个没头没脑的 Unsupported）。大小是文件的属性，
+ * 不是调用方该猜的东西。 */
+EFI_STATUS t_read_file_alloc(const char *name, void **outBuf, UINTN *outLen) {
+    EFI_FILE_PROTOCOL *f = 0;
+    CHAR16 wname[260];
+    UINTN size = 0;
+    void *buf = 0;
+    EFI_STATUS s;
+
+    if (outBuf) *outBuf = 0;
+    if (outLen) *outLen = 0;
+    if (!gEnv.Root) return EFI_NOT_FOUND;
+
+    t_ascii_to_u16(name, wname, 260);
+    s = gEnv.Root->Open(gEnv.Root, &f, wname, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(s) || !f) { log_puts("[log] open FAILED: "); log_puts(name); log_puts("\r\n"); return s; }
+
+    {
+        static UINT8 info[512];
+        EFI_FILE_INFO *fi = (EFI_FILE_INFO *)info;
+        UINTN isz = sizeof(info);
+        s = f->GetInfo(f, &gEfiFileInfoGuid, &isz, info);
+        if (EFI_ERROR(s)) { f->Close(f); return s; }
+        size = (UINTN)fi->FileSize;
+    }
+    if (size == 0) { f->Close(f); return EFI_NOT_FOUND; }
+
+    s = gEnv.BS->AllocatePool(EfiLoaderData, size + 1, &buf);
+    if (EFI_ERROR(s) || !buf) { f->Close(f); return s; }
+
+    {
+        UINTN total = 0;
+        for (;;) {
+            UINTN want = 65536;
+            s = f->Read(f, &want, (UINT8 *)buf + total);
+            if (EFI_ERROR(s) || want == 0) break;
+            total += want;
+            if (total >= size) break;
+        }
+        f->Close(f);
+        ((char *)buf)[total] = 0;
+        if (outLen) *outLen = total;
+        log_puts("[log] read "); log_u64(total); log_puts(" bytes <- "); log_puts(name);
+        log_puts("  (file size "); log_u64(size); log_puts(")\r\n");
+        if (total != size) {
+            log_puts("[log] !! short read: got "); log_u64(total);
+            log_puts(" of "); log_u64(size); log_puts("\r\n");
+            gEnv.BS->FreePool(buf);
+            return EFI_VOLUME_CORRUPTED;
+        }
+    }
+
+    if (outBuf) *outBuf = buf; else gEnv.BS->FreePool(buf);
     return EFI_SUCCESS;
 }

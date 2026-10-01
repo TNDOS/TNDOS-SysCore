@@ -125,6 +125,7 @@ static void cmd_help(void) {
     con_puts("    DRIVERS           list loaded drivers\r\n");
     con_puts("    LOAD <file>       load a UEFI image (~= load fs0:\\<file>)\r\n");
     con_puts("    <prog> [args]     run a TNX program by name (extension optional)\r\n");
+    con_puts("  \r\n  Editing: Up/Down = command history, Left/Right/Home/End = move, Del = delete\r\n");
     con_puts("    TNX <file.tnx>    dump header + section table, do NOT run it\r\n");
     con_puts("    TNXRUN <file>     run it with full loader trace\r\n");
     con_puts("    REBOOT / SHUTDOWN reset / power off (UEFI ResetSystem)\r\n");
@@ -380,6 +381,120 @@ static void show_prompt(void) {
     con_puts(">");
 }
 
+/* ------------------------------------------------ 命令历史 + 行编辑
+ * DOS 5 的 DOSKEY 才给 Shell 加上历史和行编辑；更早的 command.com 只能
+ * 从头敲。既然做得到，就没有理由不做 —— 敲错一个字符要重敲整行是很难受的。
+ *
+ * 关键点：**必须处理扫描码**。之前那个循环写的是
+ *     if (k.UnicodeChar == 0) continue;
+ * 于是方向键（UnicodeChar 为 0、只有扫描码）全被丢掉了。 */
+#define HIST_MAX 16
+
+static char gHist[HIST_MAX][TND_MAX_LINE];
+static int  gHistCount = 0;
+
+static void hist_add(const char *line) {
+    int i;
+    if (!line || !*line) return;
+    if (gHistCount > 0 && !t_strcmp(gHist[gHistCount - 1], line)) return;   /* 连续重复不记 */
+    if (gHistCount < HIST_MAX) {
+        t_strncpy(gHist[gHistCount++], line, TND_MAX_LINE);
+    } else {
+        for (i = 1; i < HIST_MAX; i++) t_strncpy(gHist[i - 1], gHist[i], TND_MAX_LINE);
+        t_strncpy(gHist[HIST_MAX - 1], line, TND_MAX_LINE);
+    }
+}
+
+/* 重画当前行。maxLen 是这一轮里显示过的最长内容 ——
+ * 用它把上一次留下的尾巴擦掉，不然改短之后会有残留字符。 */
+static void redraw_line(UINTN col, UINTN row, const char *line, UINTN n, UINTN pos, UINTN *maxLen) {
+    char tmp[TND_MAX_LINE + 8];
+    UINTN i, t = 0;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *o = gEnv.ST->ConOut;
+
+    for (i = 0; i < n; i++) tmp[t++] = line[i];
+    for (i = n; i < *maxLen; i++) tmp[t++] = ' ';
+    tmp[t] = 0;
+
+    o->SetCursorPosition(o, col, row);
+    con_puts(tmp);
+    if (n > *maxLen) *maxLen = n;
+    o->SetCursorPosition(o, col + pos, row);
+}
+
+static void read_line(char *line, UINTN cap) {
+    UINTN n = 0, pos = 0, maxLen = 0;
+    UINTN startCol, row;
+    int   hist = gHistCount;          /* == gHistCount 表示"还没进历史" */
+    char  saved[TND_MAX_LINE];
+
+    line[0] = 0;
+    saved[0] = 0;
+
+    startCol = gEnv.ST->ConOut->Mode->CursorColumn;
+    row      = gEnv.ST->ConOut->Mode->CursorRow;
+
+    for (;;) {
+        EFI_INPUT_KEY k;
+        EFI_STATUS s = gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k);
+        if (s == EFI_NOT_READY || EFI_ERROR(s)) { gEnv.BS->Stall(20000); continue; }
+
+        if (k.ScanCode) {
+            int redraw = 1;
+            switch (k.ScanCode) {
+            case 0x01:                                   /* Up */
+                if (gHistCount == 0) { redraw = 0; break; }
+                if (hist == gHistCount) t_strncpy(saved, line, sizeof(saved));
+                if (hist > 0) hist--;
+                t_strncpy(line, gHist[hist], cap);
+                n = pos = t_strlen(line);
+                break;
+            case 0x02:                                   /* Down */
+                if (hist >= gHistCount) { redraw = 0; break; }
+                hist++;
+                t_strncpy(line, (hist == gHistCount) ? saved : gHist[hist], cap);
+                n = pos = t_strlen(line);
+                break;
+            case 0x03: if (pos < n) pos++; else redraw = 0; break;   /* Right */
+            case 0x04: if (pos > 0) pos--; else redraw = 0; break;   /* Left  */
+            case 0x05: pos = 0; break;                                /* Home  */
+            case 0x06: pos = n; break;                                /* End   */
+            case 0x08:                                                /* Delete */
+                if (pos < n) { UINTN i; for (i = pos; i < n; i++) line[i] = line[i + 1]; n--; }
+                else redraw = 0;
+                break;
+            default: redraw = 0; break;
+            }
+            if (redraw) redraw_line(startCol, row, line, n, pos, &maxLen);
+            continue;
+        }
+
+        if (k.UnicodeChar == '\r' || k.UnicodeChar == '\n') {
+            /* 先跳到行尾再换行，否则光标停在中间、后面的输出会盖住这行 */
+            gEnv.ST->ConOut->SetCursorPosition(gEnv.ST->ConOut, startCol + n, row);
+            con_puts("\r\n");
+            break;
+        }
+        if (k.UnicodeChar == 0x08) {                     /* Backspace */
+            if (pos > 0) {
+                UINTN i;
+                for (i = pos - 1; i < n; i++) line[i] = line[i + 1];
+                pos--; n--;
+                redraw_line(startCol, row, line, n, pos, &maxLen);
+            }
+            continue;
+        }
+        if (k.UnicodeChar >= 0x20 && n + 1 < cap && n + 1 < TND_MAX_LINE) {
+            UINTN i;
+            for (i = n; i > pos; i--) line[i] = line[i - 1];
+            line[pos] = (char)k.UnicodeChar;
+            n++; pos++;
+            redraw_line(startCol, row, line, n, pos, &maxLen);
+        }
+    }
+    line[n] = 0;
+}
+
 int shell_start(void) {
     static char buf[TND_FILE_CAP];
     UINTN len = 0;
@@ -398,22 +513,13 @@ int shell_start(void) {
     con_puts("\r\n");
     for (;;) {
         char line[TND_MAX_LINE];
-        UINTN n = 0;
+
+        con_cursor(1);
         show_prompt();
-        for (;;) {
-            EFI_INPUT_KEY k;
-            EFI_STATUS s = gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k);
-            if (s == EFI_NOT_READY || EFI_ERROR(s)) { gEnv.BS->Stall(20000); continue; }
-            if (k.UnicodeChar == 0) continue;
-            if (k.UnicodeChar == '\r' || k.UnicodeChar == '\n') { con_puts("\r\n"); break; }
-            if (k.UnicodeChar == 0x08) { if (n) { n--; con_puts("\b \b"); } continue; }
-            if (k.UnicodeChar >= 0x20 && n + 1 < TND_MAX_LINE) {
-                line[n++] = (char)k.UnicodeChar;
-                con_putc((char)k.UnicodeChar);
-            }
-        }
-        line[n] = 0;
+        read_line(line, TND_MAX_LINE);
+
         t_rtrim(line);
+        hist_add(line);
         log_puts("[log] cmd: "); log_puts(line); log_puts("\r\n");
         if (!t_stricmp(t_skip_ws(line), "EXIT")) { con_puts("  Leaving the shell.\r\n"); return 1; }
         shell_exec_line(line);

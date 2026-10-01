@@ -24,7 +24,10 @@ static void banner(void) {
 }
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
-    static char kbuf[TND_BLOB_CAP];
+    /* 不用固定上限的静态缓冲：上限迟早被超过（踩过两次：16KB、64KB），
+     * 而且症状永远是 LoadImage 回一个没头没脑的 Unsupported。
+     * 大小是文件的属性，按它分配。 */
+    void *kbuf = 0;
     UINTN klen = 0;
     void *image = 0;
     EFI_HANDLE kernelHandle = 0;
@@ -60,7 +63,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 
     /* --- read the kernel --- */
     con_puts("[2/4] Reading " TND_KERNEL " ...\r\n");
-    s = t_read_file(TND_KERNEL, kbuf, TND_BLOB_CAP, &klen);
+    s = t_read_file_alloc(TND_KERNEL, &kbuf, &klen);
     if (EFI_ERROR(s) || klen == 0) {
         con_puts("      FAILED: kernel image not readable.\r\n");
         log_kv("boot", "read kernel FAILED");
@@ -70,9 +73,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 
     /* --- hand it to the firmware loader --- */
     con_puts("[3/4] LoadImage / StartImage the kernel ...\r\n");
-    s = gEnv.BS->AllocatePool(EfiLoaderData, klen, &image);
-    if (EFI_ERROR(s) || !image) { con_puts("      FAILED: out of memory.\r\n"); return s; }
-    t_memcpy(image, kbuf, klen);
+    /* LoadImage 会在调用期间把源缓冲整个吃掉，所以可以直接把读进来的缓冲交给它，
+     * 少一次 klen 大小的拷贝。 */
+    image = kbuf;
 
     s = gEnv.BS->LoadImage(1 /*BootPolicy*/, ImageHandle, 0 /*DevicePath*/,
                            image, klen, &kernelHandle);

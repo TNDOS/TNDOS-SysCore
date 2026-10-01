@@ -133,6 +133,7 @@ int  tnd_cols(void)             { return gApi->cols ? gApi->cols() : 80; }
 int  tnd_rows(void)             { return gApi->rows ? gApi->rows() : 25; }
 void tnd_setattr(int attr)      { if (gApi->setattr) gApi->setattr(attr); }
 int  tnd_getattr(void)          { return gApi->getattr ? gApi->getattr() : 0x07; }
+void tnd_cursor(int visible)    { if (gApi->cursor) gApi->cursor(visible); }
 
 /* ------------------------------------------------------------ 内存/时间 */
 void   *tnd_alloc(tnd_size n) { return gApi->alloc(n); }

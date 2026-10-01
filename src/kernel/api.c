@@ -381,6 +381,8 @@ static TND_ABI int api_rows(void) {
 
 static TND_ABI void api_setattr(int attr) { con_set_attr((UINTN)(attr & 0xFF)); }
 
+static TND_ABI void api_cursor(int visible) { con_cursor(visible); }
+
 static TND_ABI int api_getattr(void) {
     if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
         return (int)gEnv.ST->ConOut->Mode->Attribute;
@@ -397,7 +399,8 @@ static const TND_API_TABLE gApi = {
     api_findfirst, api_findnext, api_findclose,
     api_alloc, api_free, api_ticks,
     api_cls, api_gotoxy, api_getkey, api_cols, api_rows,
-    api_setattr, api_getattr
+    api_setattr, api_getattr,
+    api_cursor
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }
