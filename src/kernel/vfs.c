@@ -262,10 +262,14 @@ int vfs_dir(const char *dos) {
             if (!t_strcmp(name, ".") || !t_strcmp(name, "..")) continue;
 
             if (fi->Attribute & EFI_FILE_DIRECTORY) {
+                /* 目录用亮青 —— DOS 本身没颜色（那是 DIR /不同 时代的事），
+                 * 但既然 UEFI 的 ConOut 支持属性，白给的可读性没理由不要。 */
                 dirs++;
+                con_set_attr(TND_ATTR(TND_LIGHTCYAN, TND_BLACK));
                 con_puts("   <DIR>          ");
                 t_upper(name);
                 con_puts(name); con_puts("\r\n");
+                con_reset_attr();
             } else {
                 files++; bytes += fi->FileSize;
                 con_puts("   ");
@@ -286,8 +290,21 @@ int vfs_dir(const char *dos) {
                 } else {
                     con_puts("                   ");
                 }
+                /* 可执行文件亮绿，普通文件浅灰 */
+                {
+                    int nl = (int)t_strlen(name);
+                    int ex = 0;
+                    if (nl > 4 && name[nl - 4] == '.') {
+                        ex = (!t_stricmp(name + nl - 4, ".TNX") || !t_stricmp(name + nl - 4, ".EFI") ||
+                              !t_stricmp(name + nl - 4, ".EXE") || !t_stricmp(name + nl - 4, ".COM") ||
+                              !t_stricmp(name + nl - 4, ".BAT"));
+                    }
+                    con_set_attr(ex ? TND_ATTR(TND_LIGHTGREEN, TND_BLACK)
+                                    : TND_ATTR(TND_LIGHTGRAY, TND_BLACK));
+                }
                 t_upper(name);
                 con_puts(name); con_puts("\r\n");
+                con_reset_attr();
             }
         }
     }

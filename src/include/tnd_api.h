@@ -40,7 +40,30 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020100u
+#define TND_API_VERSION 0x00020200u
+
+/* ------------------------------------------------------------ 颜色
+ * UEFI 的 EFI_TEXT_ATTR(fg, bg) 就是 fg | (bg << 4) —— 和 DOS 的 VGA
+ * 属性字节**恰好一模一样**（连调色板的顺序都一样）。
+ * 所以下面这些 DOS 常量可以原样用，不需要任何翻译层。 */
+#define TND_BLACK         0
+#define TND_BLUE          1
+#define TND_GREEN         2
+#define TND_CYAN          3
+#define TND_RED           4
+#define TND_MAGENTA       5
+#define TND_BROWN         6
+#define TND_LIGHTGRAY     7
+#define TND_DARKGRAY      8
+#define TND_LIGHTBLUE     9
+#define TND_LIGHTGREEN   10
+#define TND_LIGHTCYAN    11
+#define TND_LIGHTRED     12
+#define TND_LIGHTMAGENTA 13
+#define TND_YELLOW       14
+#define TND_WHITE        15
+
+#define TND_ATTR(fg, bg) ((int)(fg) | ((int)(bg) << 4))
 
 /* ------------------------------------------------------------ 屏幕与键盘
  * v2.0 只有控制台输出 —— 那写不了全屏程序。EDIT 一上手就暴露了：
@@ -150,6 +173,10 @@ typedef struct {
     int  (*TND_ABI getkey)(void);   /* 阻塞。返回 (扫描码 << 16) | UnicodeChar */
     int  (*TND_ABI cols)(void);
     int  (*TND_ABI rows)(void);
+
+    /* --- 颜色（v2.2 追加）--- */
+    void (*TND_ABI setattr)(int attr);   /* TND_ATTR(fg, bg) */
+    int  (*TND_ABI getattr)(void);
 
 } TND_API_TABLE;
 

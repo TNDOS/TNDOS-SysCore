@@ -108,6 +108,8 @@ void log_kv_u64(const char *k, UINT64 v);
 void con_puts(const char *s);
 void con_putc(char c);
 void con_write(const char *s, UINTN n);
+void con_set_attr(UINTN attr);
+void con_reset_attr(void);
 void con_u64(UINT64 v);
 void con_hex(UINT64 v);
 void con_clear(void);

@@ -45,38 +45,59 @@ void log_kv_u64(const char *k, UINT64 v) { ser_raw("[log] "); ser_raw(k); ser_ra
  * 再镜像一遍日志里每条就是双份。这里只走 ConOut 一条路。 */
 #define TND_CON_MIRROR_SERIAL 0
 
-void con_puts(const char *s) {
-    static CHAR16 wbuf[4096];
-#if TND_CON_MIRROR_SERIAL
-    ser_raw(s);
-#endif
-    if (!gOut) return;
-    t_utf8_to_u16(s, wbuf, 4096);      /* ConOut 吃 UCS-2，源码是 UTF-8，必须先解码 */
-    gOut->OutputString(gOut, wbuf);
-}
-
-void con_putc(char c) { char b[2]; b[0] = c; b[1] = 0; con_puts(b); }
-
-/* 二进制安全的分块输出。con_puts 只吃以 0 结尾的字符串，
- * 而 TNX 程序写 fd 1 时给的是 (buf, count) —— 里面可能就有 0。
- * 另外一次调用输出一整块，比逐字符调 ConOut 快得多（EDIT 会需要）。 */
+/* --------------------------------------------------------- 换行翻译
+ * OVMF 的 ConOut 把单独的 LF 当成「下移一行」——**不回到行首**。
+ * 所以字符串里写 "\n" 就会一路斜下去，而且上一行末尾的东西会被卷到
+ * 下一行开头（看起来像丢字符）。
+ *
+ * 修在控制台层，而不是要求每个调用方都记得写 "\r\n" ——
+ * 后者已经出过一次事故了：EXECOM 用 tnd_puts 输出带 \n 的行，
+ * 光标停在行中间，紧接着内核打印的 "returned 1" 就从那里接着打，
+ * 看起来像内核坏了，其实是被程序的坏光标带歪的。
+ *
+ * DOS 的 BIOS teletype 也是这么做的：LF 就是"回车+换行"。
+ * 已经写了 \r\n 的不会被翻倍（检查前一个字符是不是 \r）。 */
 void con_write(const char *s, UINTN n) {
     static CHAR16 wbuf[1024];
+    char tmp[512];
     UINTN off = 0;
+
     if (!s || !n) return;
+
     while (off < n) {
-        UINTN chunk = n - off;
-        if (chunk > 511) chunk = 511;
-        char tmp[512];
-        t_memcpy(tmp, s + off, chunk);
-        tmp[chunk] = 0;
+        UINTN k = 0;
+        while (off < n && k < sizeof(tmp) - 3) {
+            char c = s[off++];
+            if (c == '\n' && (k == 0 || tmp[k - 1] != '\r')) tmp[k++] = '\r';
+            tmp[k++] = c;
+        }
+        tmp[k] = 0;
         if (gOut) {
             t_utf8_to_u16(tmp, wbuf, 1024);
             gOut->OutputString(gOut, wbuf);
         }
-        off += chunk;
     }
 }
+
+void con_puts(const char *s) {
+    if (!s) return;
+#if TND_CON_MIRROR_SERIAL
+    ser_raw(s);
+#endif
+    con_write(s, t_strlen(s));
+}
+
+void con_putc(char c) { char b[2]; b[0] = c; b[1] = 0; con_puts(b); }
+
+/* --------------------------------------------------------- 颜色
+ * UEFI 的 EFI_TEXT_ATTR(fg, bg) = fg | (bg << 4) —— 和 DOS 的 VGA 属性字节
+ * **恰好一模一样**（0=黑 1=蓝 2=绿 3=青 4=红 5=品红 6=棕 7=浅灰 …）。
+ * 所以 DOS 的颜色常量可以直接用，不需要任何翻译。 */
+void con_set_attr(UINTN attr) {
+    if (gOut && gOut->SetAttribute) gOut->SetAttribute(gOut, attr);
+}
+
+void con_reset_attr(void) { con_set_attr(0x07); }   /* 浅灰 on 黑，和 DOS 默认一致 */
 
 void con_u64(UINT64 v) { char b[24]; t_utoa(v, b); con_puts(b); }
 

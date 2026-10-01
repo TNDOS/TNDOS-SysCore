@@ -379,6 +379,14 @@ static TND_ABI int api_rows(void) {
     return (int)r;
 }
 
+static TND_ABI void api_setattr(int attr) { con_set_attr((UINTN)(attr & 0xFF)); }
+
+static TND_ABI int api_getattr(void) {
+    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
+        return (int)gEnv.ST->ConOut->Mode->Attribute;
+    return 0x07;
+}
+
 /* ------------------------------------------------------------------ 表 */
 static const TND_API_TABLE gApi = {
     sizeof(TND_API_TABLE), TND_API_VERSION,
@@ -388,7 +396,8 @@ static const TND_API_TABLE gApi = {
     api_unlink, api_mkdir, api_rmdir, api_rename, api_stat,
     api_findfirst, api_findnext, api_findclose,
     api_alloc, api_free, api_ticks,
-    api_cls, api_gotoxy, api_getkey, api_cols, api_rows
+    api_cls, api_gotoxy, api_getkey, api_cols, api_rows,
+    api_setattr, api_getattr
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

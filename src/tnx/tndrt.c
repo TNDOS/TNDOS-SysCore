@@ -131,6 +131,8 @@ void tnd_gotoxy(int x, int y)   { if (gApi->gotoxy) gApi->gotoxy(x, y); }
 int  tnd_getkey(void)           { return gApi->getkey(); }
 int  tnd_cols(void)             { return gApi->cols ? gApi->cols() : 80; }
 int  tnd_rows(void)             { return gApi->rows ? gApi->rows() : 25; }
+void tnd_setattr(int attr)      { if (gApi->setattr) gApi->setattr(attr); }
+int  tnd_getattr(void)          { return gApi->getattr ? gApi->getattr() : 0x07; }
 
 /* ------------------------------------------------------------ 内存/时间 */
 void   *tnd_alloc(tnd_size n) { return gApi->alloc(n); }
@@ -203,6 +205,18 @@ void tnd_strcat(char *dst, const char *src, tnd_size cap) {
     tnd_size n = tnd_strlen(dst);
     if (n >= cap) return;
     tnd_strncpy(dst + n, src, cap - n);
+}
+
+int tnd_isdigit(int c) { return c >= '0' && c <= '9'; }
+
+int tnd_atoi(const char *s) {
+    int sign = 1, v = 0;
+    if (!s) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') s++;
+    while (tnd_isdigit((unsigned char)*s)) { v = v * 10 + (*s - '0'); s++; }
+    return v * sign;
 }
 
 void tnd_memzero(void *p, tnd_size n) {

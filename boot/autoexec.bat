@@ -59,9 +59,18 @@ echo.
 echo   --- unknown program name ---
 NOPE.TNX
 echo.
+echo   --- TREE (nested) ---
+TREE
+echo.
 echo   --- Memory self-test ---
 memtest
 echo.
 echo   ------------------------------------------
 echo   Boot complete. Type HELP for commands.
+echo.
+echo   --- DIR with colour coding (dirs cyan, executables green) ---
+DIR
+echo.
+echo   EDIT is interactive, so a batch file must not start it.
+echo   Run it by hand:   EDIT TNDOS.TXT      F2 saves, ESC quits
 echo.

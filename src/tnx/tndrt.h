@@ -61,6 +61,8 @@ void tnd_gotoxy(int x, int y);
 int  tnd_getkey(void);     /* 阻塞。用 TND_KEY()/TND_SCAN() 拆包 */
 int  tnd_cols(void);
 int  tnd_rows(void);
+void tnd_setattr(int attr);   /* TND_ATTR(fg, bg)，颜色常量见 tnd_api.h */
+int  tnd_getattr(void);
 
 /* --- 内存 / 时间 --- */
 void   *tnd_alloc(tnd_size n);
@@ -87,5 +89,7 @@ int      tnd_stricmp(const char *a, const char *b);
 void     tnd_memzero(void *p, tnd_size n);
 void     tnd_strncpy(char *dst, const char *src, tnd_size cap);
 void     tnd_strcat(char *dst, const char *src, tnd_size cap);
+int      tnd_atoi(const char *s);
+int      tnd_isdigit(int c);
 
 #endif /* TNDRT_H */
