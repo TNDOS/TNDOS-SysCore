@@ -341,6 +341,44 @@ static TND_ABI void *api_alloc(tnd_size n) { return kmalloc((UINTN)n); }
 static TND_ABI void  api_free(void *p)     { kfree(p); }
 static TND_ABI tnd_u64 api_ticks(void)     { return 0; }   /* 定时器子系统还没有 */
 
+/* ------------------------------------------------------------ 屏幕与键盘 */
+static TND_ABI void api_cls(void) {
+    if (gEnv.ST && gEnv.ST->ConOut) gEnv.ST->ConOut->ClearScreen(gEnv.ST->ConOut);
+}
+
+static TND_ABI void api_gotoxy(int x, int y) {
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (gEnv.ST && gEnv.ST->ConOut)
+        gEnv.ST->ConOut->SetCursorPosition(gEnv.ST->ConOut, (UINTN)x, (UINTN)y);
+}
+
+/* 阻塞读键，**保留扫描码** —— 方向键的 UnicodeChar 是 0，
+ * 只看它等于什么都没读到。这是写全屏程序的前提。 */
+static TND_ABI int api_getkey(void) {
+    EFI_INPUT_KEY k;
+    if (!gEnv.ST || !gEnv.ST->ConIn) return 0;
+    for (;;) {
+        if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k)))
+            return (int)(((UINT32)k.ScanCode << 16) | (UINT32)k.UnicodeChar);
+        gEnv.BS->Stall(10000);
+    }
+}
+
+static TND_ABI int api_cols(void) {
+    UINTN c = 80, r = 25;
+    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
+        gEnv.ST->ConOut->QueryMode(gEnv.ST->ConOut, gEnv.ST->ConOut->Mode->Mode, &c, &r);
+    return (int)c;
+}
+
+static TND_ABI int api_rows(void) {
+    UINTN c = 80, r = 25;
+    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
+        gEnv.ST->ConOut->QueryMode(gEnv.ST->ConOut, gEnv.ST->ConOut->Mode->Mode, &c, &r);
+    return (int)r;
+}
+
 /* ------------------------------------------------------------------ 表 */
 static const TND_API_TABLE gApi = {
     sizeof(TND_API_TABLE), TND_API_VERSION,
@@ -349,7 +387,8 @@ static const TND_API_TABLE gApi = {
     api_open, api_close, api_read, api_write, api_seek,
     api_unlink, api_mkdir, api_rmdir, api_rename, api_stat,
     api_findfirst, api_findnext, api_findclose,
-    api_alloc, api_free, api_ticks
+    api_alloc, api_free, api_ticks,
+    api_cls, api_gotoxy, api_getkey, api_cols, api_rows
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

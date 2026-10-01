@@ -40,7 +40,26 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020000u
+#define TND_API_VERSION 0x00020100u
+
+/* ------------------------------------------------------------ 屏幕与键盘
+ * v2.0 只有控制台输出 —— 那写不了全屏程序。EDIT 一上手就暴露了：
+ * 没有 cls/gotoxy，光标没法定位；读键也拿不到方向键（扫描码被丢掉了）。 */
+#define TND_KEY(c)   ((int)((c) & 0xFFFF))
+#define TND_SCAN(c)  ((int)(((c) >> 16) & 0xFFFF))
+
+/* UEFI 的扫描码（EFI_INPUT_KEY.ScanCode），直接沿用 */
+#define TND_S_UP      0x01
+#define TND_S_DOWN    0x02
+#define TND_S_RIGHT   0x03
+#define TND_S_LEFT    0x04
+#define TND_S_HOME    0x05
+#define TND_S_END     0x06
+#define TND_S_INSERT  0x07
+#define TND_S_DELETE  0x08
+#define TND_S_PGUP    0x09
+#define TND_S_PGDN    0x0A
+#define TND_S_ESC     0x17
 
 /* ------------------------------------------------------------------ 句柄 */
 #define TND_STDIN   0
@@ -123,6 +142,14 @@ typedef struct {
     void    *(*TND_ABI alloc)(tnd_size n);
     void     (*TND_ABI free)(void *p);
     tnd_u64  (*TND_ABI ticks)(void);
+
+    /* --- 屏幕与键盘（v2.1 追加）
+     * 一律加在**表尾** —— StructSize 让老程序能安全地不认识新字段。 */
+    void (*TND_ABI cls)(void);
+    void (*TND_ABI gotoxy)(int x, int y);
+    int  (*TND_ABI getkey)(void);   /* 阻塞。返回 (扫描码 << 16) | UnicodeChar */
+    int  (*TND_ABI cols)(void);
+    int  (*TND_ABI rows)(void);
 
 } TND_API_TABLE;
 

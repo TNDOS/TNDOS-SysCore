@@ -186,24 +186,33 @@ static void with_ext(const char *name, const char *ext, char *out, UINTN cap) {
  * 而该是一次说明。所以交给 EXECOM 去解释（见 EXECOM 的文档）。
  * EXECOM 不在时退回到 Shell 自带的兜底消息，免得用户把 EXECOM 删了就变成哑巴。 */
 static int run_program(const char *cmd, const char *arg) {
+    static const char *order[3] = { ".TNX", ".EXE", ".COM" };
     char prog[TND_MAX_PATH];
     char store[512];
     char *av[9];
-    int ac;
+    int ac, len, i;
 
-    if (tnx_find(cmd, prog, sizeof(prog))) {
-        ac = make_argv(cmd, arg, store, sizeof(store), av, 9);
-        tnx_run(prog, ac, av, 0);
-        return 1;
-    }
+    len = (int)t_strlen(cmd);
 
-    {
-        static const char *exts[2] = { ".EXE", ".COM" };
-        for (int e = 0; e < 2; e++) {
-            char nm[TND_MAX_PATH];
-            with_ext(cmd, exts[e], nm, sizeof(nm));
-            if (!tnx_find(nm, prog, sizeof(prog))) continue;
+    for (i = 0; i < 3; i++) {
+        char nm[TND_MAX_PATH];
 
+        /* 用户自己写了扩展名（而且是四个字符的）就只试他写的那个 ——
+         * 否则敲 PEDEMO.EXE 会先被当成 TNX 去找，找到那个 .EXE 文件、
+         * 然后报 "bad magic"，永远走不到 EXECOM。 */
+        if (len > 4 && cmd[len - 4] == '.') {
+            if (t_stricmp(cmd + len - 4, order[i]) != 0) continue;
+            t_strncpy(nm, cmd, sizeof(nm));
+        } else {
+            with_ext(cmd, order[i], nm, sizeof(nm));
+        }
+
+        if (!tnx_find(nm, prog, sizeof(prog))) continue;
+
+        if (i == 0) {
+            ac = make_argv(cmd, arg, store, sizeof(store), av, 9);
+            tnx_run(prog, ac, av, 0);
+        } else {
             char execom[TND_MAX_PATH];
             if (tnx_find("EXECOM", execom, sizeof(execom))) {
                 static char ename[] = "EXECOM";
@@ -215,8 +224,8 @@ static int run_program(const char *cmd, const char *arg) {
                 con_puts("  Long mode cannot run 16-bit code, and TNDDOS does not load PE images.\r\n");
                 con_puts("  (Put EXECOM.TNX next to it for a full diagnosis.)\r\n");
             }
-            return 1;
         }
+        return 1;
     }
     return 0;
 }

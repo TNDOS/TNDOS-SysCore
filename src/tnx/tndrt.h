@@ -55,6 +55,13 @@ int tnd_findfirst(const char *pattern, TND_FIND *out);
 int tnd_findnext(int fh, TND_FIND *out);
 int tnd_findclose(int fh);
 
+/* --- 屏幕与键盘（v2.1）--- */
+void tnd_cls(void);
+void tnd_gotoxy(int x, int y);
+int  tnd_getkey(void);     /* 阻塞。用 TND_KEY()/TND_SCAN() 拆包 */
+int  tnd_cols(void);
+int  tnd_rows(void);
+
 /* --- 内存 / 时间 --- */
 void   *tnd_alloc(tnd_size n);
 void    tnd_free(void *p);
@@ -78,5 +85,7 @@ tnd_size tnd_strlen(const char *s);
 int      tnd_strcmp(const char *a, const char *b);
 int      tnd_stricmp(const char *a, const char *b);
 void     tnd_memzero(void *p, tnd_size n);
+void     tnd_strncpy(char *dst, const char *src, tnd_size cap);
+void     tnd_strcat(char *dst, const char *src, tnd_size cap);
 
 #endif /* TNDRT_H */

@@ -1,0 +1,17 @@
+TNDDOS -- a DOS redefined for the UEFI era.
+
+This file exists so that external commands have something to chew on.
+FIND searches it, MORE pages it, FC can diff it against a copy.
+
+The point of TNDDOS is not to move DOS onto UEFI.
+It is to keep DOS's interaction model and drop its memory model.
+
+So: fixed segments, one program at a time, no protection -- on purpose.
+But no 640K barrier, no himem, no XMS, no EMM386, no conventional memory.
+
+TNX is the executable format. A PE loader is eight hundred lines of
+edge cases; TNX is a memcpy and a jump. That is the whole argument.
+
+DOS
+DOS again (for FIND /C)
+dos in lowercase (for FIND /I)

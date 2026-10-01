@@ -39,6 +39,23 @@ echo.
 echo   --- TNX <file> inspects, does not run ---
 tnx HELLO.TNX
 echo.
+echo   --- external commands (TNDOS-Commands, TNX programs) ---
+TREE
+echo.
+echo   --- EXECOM: typing a .EXE gets you a diagnosis, not an error ---
+PEDEMO.EXE
+DOSDEMO.EXE
+echo.
+echo   --- EXECOM also works without the extension ---
+PEDEMO
+echo.
+echo   --- FIND / ATTRIB / FC ---
+FIND DOS TNDOS.TXT
+ATTRIB *.TNX
+echo.
+echo   --- MORE (paged) ---
+MORE TNDOS.TXT
+echo.
 echo   --- unknown program name ---
 NOPE.TNX
 echo.

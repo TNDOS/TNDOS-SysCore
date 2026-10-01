@@ -125,23 +125,37 @@ int tnd_findfirst(const char *pat, TND_FIND *o) { return gApi->findfirst(pat, o)
 int tnd_findnext(int fh, TND_FIND *o)           { return gApi->findnext(fh, o); }
 int tnd_findclose(int fh)                       { return gApi->findclose(fh); }
 
+/* ------------------------------------------------------------ 屏幕/键盘 */
+void tnd_cls(void)              { if (gApi->cls) gApi->cls(); }
+void tnd_gotoxy(int x, int y)   { if (gApi->gotoxy) gApi->gotoxy(x, y); }
+int  tnd_getkey(void)           { return gApi->getkey(); }
+int  tnd_cols(void)             { return gApi->cols ? gApi->cols() : 80; }
+int  tnd_rows(void)             { return gApi->rows ? gApi->rows() : 25; }
+
 /* ------------------------------------------------------------ 内存/时间 */
 void   *tnd_alloc(tnd_size n) { return gApi->alloc(n); }
 void    tnd_free(void *p)     { gApi->free(p); }
 tnd_u64 tnd_ticks(void)       { return gApi->ticks(); }
 
 /* ------------------------------------------------------------ 便捷函数 */
+/* 读一行。返回值：-1 = EOF（调用方必须用它判断结束），
+ * >= 0 = 行长（**空行返回 0**）。
+ *
+ * 这里曾经返回 0 表示 EOF —— 结果空行和文件结束分不开，
+ * MORE 读到第一个空行就以为文件读完了。调用方要是写
+ * "if (got <= 0) break" 就会撞上这个坑。 */
 tnd_i64 tnd_getline(int fd, char *buf, tnd_i64 cap) {
     tnd_i64 n = 0;
     if (cap <= 0) return -1;
-    while (n < cap - 1) {
+    for (;;) {
         char c;
         tnd_i64 r = gApi->read(fd, &c, 1);
-        if (r <= 0) break;
-        if (c == '\n') break;
+        if (r <= 0) break;                       /* EOF 或错误 */
+        if (c == '\n') { buf[n] = 0; return n; }
         if (c == '\r') continue;
-        buf[n++] = c;
+        if (n < cap - 1) buf[n++] = c;
     }
+    if (n == 0) return -1;                       /* 行首就碰到 EOF */
     buf[n] = 0;
     return n;
 }
@@ -176,6 +190,19 @@ static int lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 int tnd_stricmp(const char *a, const char *b) {
     while (*a && lower((unsigned char)*a) == lower((unsigned char)*b)) { a++; b++; }
     return lower((unsigned char)*a) - lower((unsigned char)*b);
+}
+
+void tnd_strncpy(char *dst, const char *src, tnd_size cap) {
+    tnd_size i = 0;
+    if (!cap) return;
+    for (; i + 1 < cap && src && src[i]; i++) dst[i] = src[i];
+    dst[i] = 0;
+}
+
+void tnd_strcat(char *dst, const char *src, tnd_size cap) {
+    tnd_size n = tnd_strlen(dst);
+    if (n >= cap) return;
+    tnd_strncpy(dst + n, src, cap - n);
 }
 
 void tnd_memzero(void *p, tnd_size n) {

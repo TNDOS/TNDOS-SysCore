@@ -149,7 +149,8 @@ int tnx_find(const char *name, char *out, UINTN cap) {
     t_strncpy(file, name, sizeof(file));
     if (!hasDot) t_strncpy(file + t_strlen(file), ".TNX", sizeof(file) - t_strlen(file));
 
-    t_strncpy(dirs[ndirs++], ".", TND_MAX_PATH);
+    /* 当前目录用空串：这样返回的路径就是裸文件名，不带 ".\" 前缀 */
+    dirs[ndirs][0] = 0; ndirs++;
     {
         const char *path = env_get("PATH");
         while (path && *path && ndirs < 8) {

@@ -225,7 +225,46 @@ if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 
 & (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
 
-foreach ($f in 'efidos.sys','config.sys','autoexec.bat','HELLO.TXT') {
+# ---------------------------------------------------------------------------
+# 外部命令（TNDOS-Commands）—— 工具是 TNX 程序，已经构建好了，这里只负责部署
+# ---------------------------------------------------------------------------
+$CMDS = Get-EnvPath 'TNDDOS_COMMANDS'
+if (-not $CMDS) {
+    foreach ($guess in @((Join-Path $Root 'repos\TNDOS-Commands'), (Join-Path (Split-Path -Parent $Root) 'TNDOS-Commands'))) {
+        if (Test-Path $guess) { $CMDS = $guess; break }
+    }
+}
+if ($CMDS -and (Test-Path (Join-Path $CMDS 'bin'))) {
+    $n = 0
+    Get-ChildItem (Join-Path $CMDS 'bin') -Filter *.TNX | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $TndDir $_.Name) -Force
+        $n++
+    }
+    Write-Host ("  [cmd] " + $n + " external command(s)   <- " + (Split-Path $CMDS -Leaf))
+} else {
+    Write-Host "  [cmd] TNDOS-Commands 未找到，跳过外部命令（设 TNDDOS_COMMANDS 指定）"
+}
+
+# ---------------------------------------------------------------------------
+# 两个样本，用来演示 EXECOM。
+# 不签入仓库 —— 构建时现造，顺便说明它们的结构。
+#   PEDEMO.EXE : MZ 存根 + e_lfanew 指向 PE\0\0  -> PE 映像
+#   DOSDEMO.EXE: 纯 MZ，e_lfanew 为 0             -> 16 位 DOS 程序
+# ---------------------------------------------------------------------------
+& {
+    $pe = New-Object byte[] 256
+    $pe[0] = 0x4D; $pe[1] = 0x5A                    # "MZ"
+    $pe[0x3C] = 0x40                                # e_lfanew = 0x40
+    $pe[0x40] = 0x50; $pe[0x41] = 0x45              # "PE\0\0"
+    [System.IO.File]::WriteAllBytes((Join-Path $TndDir 'PEDEMO.EXE'), $pe)
+
+    $dos = New-Object byte[] 256
+    $dos[0] = 0x4D; $dos[1] = 0x5A                  # 只有 MZ，e_lfanew 保持 0
+    [System.IO.File]::WriteAllBytes((Join-Path $TndDir 'DOSDEMO.EXE'), $dos)
+    Write-Host "  [cmd] PEDEMO.EXE / DOSDEMO.EXE  (EXECOM samples)"
+}
+
+foreach ($f in 'efidos.sys','config.sys','autoexec.bat','HELLO.TXT','TNDOS.TXT') {
     $s = Join-Path $Root (Join-Path 'boot' $f)
     if (Test-Path $s) { Copy-Item $s (Join-Path $TndDir $f) -Force; Write-Host ("  [ cp ] " + $f) }
 }
