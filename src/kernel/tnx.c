@@ -24,41 +24,16 @@ static UINT64 gLoads = 0, gFails = 0;
 static UINT64 gLastSize = 0;
 static int    gLastCode = 0;
 
-/* ------------------------------------------------------------ API 实现
- * 全部带 TND_ABI（内核侧展开成 sysv_abi）。
- * 不加的话，内核用 MS ABI 收参数、TNX 程序用 SysV 传参数，
- * 第一个参数直接对不上 —— 崩出来还是 #UD，查起来要命。 */
-static TND_ABI void api_puts(const char *s) { con_puts(s ? s : "(null)"); }
-static TND_ABI void api_putc(int c) { con_putc((char)c); }
-
-static TND_ABI void api_putu(tnd_u64 v) {
-    char b[24]; int i = 0;
-    if (!v) { con_puts("0"); return; }
-    while (v) { b[i++] = (char)('0' + (int)(v % 10)); v /= 10; }
-    while (i) con_putc(b[--i]);
-}
-
-static TND_ABI void api_putx(tnd_u64 v) {
-    const char *hx = "0123456789ABCDEF";
-    con_puts("0x");
-    for (int i = 15; i >= 0; i--) con_putc(hx[(v >> (i * 4)) & 0xF]);
-}
-
-static TND_ABI void *api_alloc(tnd_size n) { return kmalloc((UINTN)n); }
-static TND_ABI void  api_free(void *p)     { kfree(p); }
-
-/* 还没有定时器子系统，老实返回 0；TNX 程序应当据此判定"环境不支持" */
-static TND_ABI tnd_u64 api_ticks(void) { return 0; }
-
-static const TND_API_TABLE gApi = {
-    (tnd_u32)sizeof(TND_API_TABLE), TND_API_VERSION,
-    api_puts, api_putc, api_putu, api_putx,
-    api_alloc, api_free,
-    api_ticks
-};
+/* API 表本身不住在这里 —— 见 src/kernel/api.c（程序运行环境：句柄表 + argv）。
+ * 本文件只管格式和加载：校验 -> 清零窗口 -> 逐段搬运 -> 调入口。 */
 
 /* 入口也是 SysV：程序在 ELF 那边是默认 ABI，内核这边必须显式对齐 */
 typedef int (TND_ABI *TNX_ENTRY)(const TND_API_TABLE *api);
+
+/* 本次要跑的程序参数。v1 一次只有一个程序，所以放文件级静态即可；
+ * 将来有多进程时它会变成"每进程一份"。 */
+static int   gRunArgc = 0;
+static char *gRunArgv[8];
 
 /* ---------------------------------------------------------------- 初始化 */
 int tnx_init(void) {
@@ -197,6 +172,16 @@ int tnx_find(const char *name, char *out, UINTN cap) {
     return 0;
 }
 
+/* 带命令行参数跑一个 TNX 程序。
+ * Shell 解析完命令行之后走这条路径；tnx_load 自己不带参数是有意的 ——
+ * 查看/调试的调用方不关心 argv。 */
+EFI_STATUS tnx_run(const char *path, int argc, char **argv, int *outCode) {
+    int i;
+    gRunArgc = (argc > 8) ? 8 : (argc < 0 ? 0 : argc);
+    for (i = 0; i < gRunArgc; i++) gRunArgv[i] = (argv && argv[i]) ? argv[i] : "";
+    return tnx_load(path, outCode, 0);
+}
+
 EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
     void *file = 0;
     UINTN fsize = 0;
@@ -298,7 +283,9 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
     if (verbose) con_puts("        running ...\r\n");
     {
         TNX_ENTRY entry = (TNX_ENTRY)(UINTN)(TNX_IMAGE_BASE + entryRva);
-        rc = entry(&gApi);
+        api_setup(gRunArgc, gRunArgv);      /* 装好 fd 0/1/2 与 argv */
+        rc = entry(api_get_table());
+        api_teardown();                     /* 关掉程序忘了关的句柄 */
     }
     if (verbose || rc != 0) {
         con_puts("        returned "); con_u64((UINT64)(INT64)rc);

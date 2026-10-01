@@ -1,13 +1,26 @@
 /* ============================================================================
- * TNDDOS -- TNX 程序能用的内核 API（v1）
+ * TNDDOS -- TNX 程序能用的内核 API（v2）
  *
- * 为什么是"传进来的函数表"而不是 syscall：
- *   我们现在还活在 Boot Services 底下，**固件握着 IDT**，装不了自己的中断门，
- *   所以 SYSCALL / INT 两条路都走不通（详见 TNX 设计讨论）。
- *   于是 v1 由加载器把这张表**作为参数传给程序入口**。
+ * v1 只有 puts/alloc/free/ticks —— 那个规模什么都写不了，连 MORE 都不行
+ * （它要读文件，而表里没有文件 API）。v2 把 DOS 的骨架补上：
  *
- *   源码级 API 不变：程序永远写 tnd_puts(...)。
- *   将来 ExitBootServices 之后，把表里的指针换成 syscall 桩即可，程序不用改。
+ *   句柄模型（fd 0/1/2）   ->  重定向、管道、工具组合
+ *   文件 API               ->  真能读写
+ *   目录遍历               ->  TREE / XCOPY / DELTREE
+ *   参数与环境             ->  工具有输入
+ *
+ * ---------------------------------------------------------------------------
+ * 两个和"调用约定"同一级别的坑，写在这里免得再踩：
+ *
+ * ① ABI 是 System V，不是 MS ABI。
+ *    内核用 sysv_abi 适配（见下面的 TND_ABI）。
+ *
+ * ② **这个头文件里一个 long 都不能有。**
+ *    x86_64-unknown-none 是 SysV 模型，long = 8 字节；
+ *    内核的 x86_64-pc-windows-msvc 目标，long = 4 字节。
+ *    同一个结构体在两边尺寸不同 —— 比调用约定还阴，因为结构体偏移会整体错位。
+ *    所以全部用定宽类型：tnd_u32 / tnd_u64 / tnd_i64。
+ * ---------------------------------------------------------------------------
  *
  * 零依赖：内核和 TNX 程序都包含本文件，所以只用朴素 C 类型。
  * ==========================================================================*/
@@ -15,48 +28,101 @@
 #define TND_API_H
 
 typedef unsigned int       tnd_u32;
+typedef unsigned short     tnd_u16;
+typedef unsigned char      tnd_u8;
 typedef unsigned long long tnd_u64;
+typedef long long          tnd_i64;
 typedef unsigned long long tnd_size;
 
-#define TND_API_VERSION 0x00010000u
-
-/* ============================================================================
- * 调用约定 —— 这里是全项目最容易踩、也最难查的一个坑。
- *
- * TNX 程序用 -target x86_64-unknown-none 编译 => System V AMD64 ABI
- * TNDDOS 内核用 -target x86_64-pc-windows-msvc 编译 => Microsoft x64 ABI
- *
- * 两者**不一样**：SysV 第一个参数放 RDI，MS 第一个参数放 RCX。
- * 不钉死的话，程序把字符串放进 RDI，内核函数去 RCX 拿 —— 拿到的是垃圾，
- * 而且报出来的是 #UD（无效指令），看起来跟参数传递毫无关系。
- *
- * 决定：**TNX 的 ABI 就是 System V**（TNX 是从 ELF64 出来的，这是自然选择）。
- * 内核那侧用 sysv_abi 属性把 API 入口适配过去。
- * TNX 程序侧不需要任何修饰 —— SysV 本来就是它的默认。
- * ==========================================================================*/
 #if defined(_MSC_VER)
 #  define TND_ABI __attribute__((sysv_abi))
 #else
 #  define TND_ABI
 #endif
 
+#define TND_API_VERSION 0x00020000u
+
+/* ------------------------------------------------------------------ 句柄 */
+#define TND_STDIN   0
+#define TND_STDOUT  1
+#define TND_STDERR  2
+
+/* open 的 flags */
+#define TND_O_RDONLY  0x0001
+#define TND_O_WRONLY  0x0002
+#define TND_O_RDWR    0x0003
+#define TND_O_CREATE  0x0010
+#define TND_O_TRUNC   0x0020
+
+/* seek 的 whence */
+#define TND_SEEK_SET  0
+#define TND_SEEK_CUR  1
+#define TND_SEEK_END  2
+
+/* stat 的 Attr 位 */
+#define TND_ATTR_DIR     0x0001
+#define TND_ATTR_RDONLY  0x0002
+
+#define TND_NAME_MAX     64
+#define TND_PATH_MAX     256
+
 typedef struct {
-    /* --- 头 --- */
-    tnd_u32 StructSize;      /* 整张表的大小，程序用它判断内核给了多少 */
+    tnd_u32 Size;
+    tnd_u32 Attr;
+    tnd_u32 Year;
+    tnd_u32 Month;
+    tnd_u32 Day;
+    tnd_u32 Hour;
+    tnd_u32 Minute;
+    tnd_u32 Reserved;
+} TND_STAT;
+
+typedef struct {
+    char    Name[TND_NAME_MAX];
+    tnd_u32 Size;
+    tnd_u32 Attr;
+    tnd_u32 Reserved;
+} TND_FIND;
+
+/* ------------------------------------------------------------------ API 表 */
+typedef struct {
+    tnd_u32 StructSize;
     tnd_u32 Version;
 
-    /* --- 控制台 --- */
-    void (*TND_ABI puts)(const char *s);   /* 输出以 0 结尾的字符串 */
-    void (*TND_ABI putc)(int c);           /* 输出一个字符 */
-    void (*TND_ABI putu)(tnd_u64 v);       /* 输出无符号十进制 */
-    void (*TND_ABI putx)(tnd_u64 v);       /* 输出 0x + 16 位十六进制 */
+    /* --- 控制台快捷方式（等价于写 fd 1） --- */
+    void (*TND_ABI puts)(const char *s);
+    void (*TND_ABI putc)(int c);
+    void (*TND_ABI putu)(tnd_u64 v);
+    void (*TND_ABI putx)(tnd_u64 v);
 
-    /* --- 内核堆 --- */
-    void *(*TND_ABI alloc)(tnd_size bytes);
-    void  (*TND_ABI free)(void *p);
+    /* --- 程序环境 --- */
+    int         (*TND_ABI argc)(void);
+    const char *(*TND_ABI argv)(int i);
+    const char *(*TND_ABI env)(const char *name);
 
-    /* --- 环境 --- */
-    tnd_u64 (*TND_ABI ticks)(void);        /* 单调递增的毫秒计数，失败返回 0 */
+    /* --- 句柄 I/O --- */
+    int    (*TND_ABI open)(const char *path, int flags);
+    int    (*TND_ABI close)(int fd);
+    tnd_i64 (*TND_ABI read)(int fd, void *buf, tnd_i64 count);
+    tnd_i64 (*TND_ABI write)(int fd, const void *buf, tnd_i64 count);
+    tnd_i64 (*TND_ABI seek)(int fd, tnd_i64 offset, int whence);
+
+    /* --- 文件系统 --- */
+    int (*TND_ABI unlink)(const char *path);
+    int (*TND_ABI mkdir)(const char *path);
+    int (*TND_ABI rmdir)(const char *path);
+    int (*TND_ABI rename)(const char *from, const char *to);
+    int (*TND_ABI stat)(const char *path, TND_STAT *st);
+
+    /* --- 目录遍历（DOS 式 findfirst/findnext） --- */
+    int (*TND_ABI findfirst)(const char *pattern, TND_FIND *out);
+    int (*TND_ABI findnext)(int fh, TND_FIND *out);
+    int (*TND_ABI findclose)(int fh);
+
+    /* --- 内存 / 时间 --- */
+    void    *(*TND_ABI alloc)(tnd_size n);
+    void     (*TND_ABI free)(void *p);
+    tnd_u64  (*TND_ABI ticks)(void);
 
 } TND_API_TABLE;
 

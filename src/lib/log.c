@@ -57,6 +57,27 @@ void con_puts(const char *s) {
 
 void con_putc(char c) { char b[2]; b[0] = c; b[1] = 0; con_puts(b); }
 
+/* 二进制安全的分块输出。con_puts 只吃以 0 结尾的字符串，
+ * 而 TNX 程序写 fd 1 时给的是 (buf, count) —— 里面可能就有 0。
+ * 另外一次调用输出一整块，比逐字符调 ConOut 快得多（EDIT 会需要）。 */
+void con_write(const char *s, UINTN n) {
+    static CHAR16 wbuf[1024];
+    UINTN off = 0;
+    if (!s || !n) return;
+    while (off < n) {
+        UINTN chunk = n - off;
+        if (chunk > 511) chunk = 511;
+        char tmp[512];
+        t_memcpy(tmp, s + off, chunk);
+        tmp[chunk] = 0;
+        if (gOut) {
+            t_utf8_to_u16(tmp, wbuf, 1024);
+            gOut->OutputString(gOut, wbuf);
+        }
+        off += chunk;
+    }
+}
+
 void con_u64(UINT64 v) { char b[24]; t_utoa(v, b); con_puts(b); }
 
 void con_clear(void) { if (gOut && gOut->ClearScreen) gOut->ClearScreen(gOut); }

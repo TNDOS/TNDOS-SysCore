@@ -124,7 +124,7 @@ static void cmd_help(void) {
     con_puts("    MODULES           list kernel modules and status\r\n");
     con_puts("    DRIVERS           list loaded drivers\r\n");
     con_puts("    LOAD <file>       load a UEFI image (~= load fs0:\\<file>)\r\n");
-    con_puts("    <prog>            run a TNX program by name (extension optional)\r\n");
+    con_puts("    <prog> [args]     run a TNX program by name (extension optional)\r\n");
     con_puts("    TNX <file.tnx>    dump header + section table, do NOT run it\r\n");
     con_puts("    TNXRUN <file>     run it with full loader trace\r\n");
     con_puts("    REBOOT / SHUTDOWN reset / power off (UEFI ResetSystem)\r\n");
@@ -140,6 +140,87 @@ static void cmd_ver(void) {
 }
 
 /* ------------------------------------------------------- run one line */
+/* ------------------------------------------------------------ 程序启动
+ * 把命令行尾巴切成 argv。v1 只按空白切，不支持引号 —— 工具够用。
+ * argv[0] 是用户敲的名字本身（DOS 的规矩），不是解析后的完整路径，
+ * 这样 usage 消息里显示的是短名。 */
+static int make_argv(const char *prog, const char *arg, char *store, UINTN cap, char **argv, int maxArgv) {
+    UINTN used = 0;
+    int n = 0;
+    const char *s;
+
+    if (n < maxArgv) {
+        argv[n++] = store;
+        while (prog && *prog && used + 1 < cap) store[used++] = *prog++;
+        store[used++] = 0;
+    }
+
+    s = arg;
+    while (s && *s && n < maxArgv) {
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) break;
+        if (used + 1 >= cap) break;
+        argv[n] = store + used;
+        while (*s && *s != ' ' && *s != '\t' && used + 1 < cap) store[used++] = *s++;
+        store[used++] = 0;
+        n++;
+    }
+    return n;
+}
+
+/* 拼一个带扩展名的候选名（原名字里已经有 '.' 就不动）。 */
+static void with_ext(const char *name, const char *ext, char *out, UINTN cap) {
+    for (const char *p = name; *p; p++) {
+        if (*p == '.') { t_strncpy(out, name, cap); return; }
+    }
+    t_strncpy(out, name, cap);
+    t_strncpy(out + t_strlen(out), ext, cap - t_strlen(out));
+}
+
+/* 找程序、装参数、跑。返回 1 = 处理过了，0 = 什么都没找到。
+ *
+ * 搜索顺序就是 DOS 的规矩：
+ *     <name>.TNX  ->  <name>.EXE  ->  <name>.COM
+ *
+ * .EXE / .COM 在长模式下跑不了 —— 但那不该是一句 "Bad command"，
+ * 而该是一次说明。所以交给 EXECOM 去解释（见 EXECOM 的文档）。
+ * EXECOM 不在时退回到 Shell 自带的兜底消息，免得用户把 EXECOM 删了就变成哑巴。 */
+static int run_program(const char *cmd, const char *arg) {
+    char prog[TND_MAX_PATH];
+    char store[512];
+    char *av[9];
+    int ac;
+
+    if (tnx_find(cmd, prog, sizeof(prog))) {
+        ac = make_argv(cmd, arg, store, sizeof(store), av, 9);
+        tnx_run(prog, ac, av, 0);
+        return 1;
+    }
+
+    {
+        static const char *exts[2] = { ".EXE", ".COM" };
+        for (int e = 0; e < 2; e++) {
+            char nm[TND_MAX_PATH];
+            with_ext(cmd, exts[e], nm, sizeof(nm));
+            if (!tnx_find(nm, prog, sizeof(prog))) continue;
+
+            char execom[TND_MAX_PATH];
+            if (tnx_find("EXECOM", execom, sizeof(execom))) {
+                static char ename[] = "EXECOM";
+                av[0] = ename;
+                av[1] = prog;
+                tnx_run(execom, 2, av, 0);
+            } else {
+                con_puts("  "); con_puts(nm); con_puts(": a DOS/Windows executable.\r\n");
+                con_puts("  Long mode cannot run 16-bit code, and TNDDOS does not load PE images.\r\n");
+                con_puts("  (Put EXECOM.TNX next to it for a full diagnosis.)\r\n");
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void shell_exec_line(char *line) {
     char cmd[32];
     UINTN i = 0;
@@ -239,16 +320,8 @@ void shell_exec_line(char *line) {
         return;
     }
 
-    /* 不是内建命令 —— 按 DOS 的规矩当成程序名去找、去跑。
-     * 找的顺序：当前目录 -> PATH 每一项；名字没扩展名就补 .TNX。 */
-    {
-        char prog[TND_MAX_PATH];
-        if (tnx_find(cmd, prog, sizeof(prog))) {
-            if (*arg) con_puts("  (note: command-line arguments are not passed to TNX programs yet)\r\n");
-            tnx_load(prog, 0, 0);      /* verbose = 0：只留程序自己的输出 */
-            return;
-        }
-    }
+    /* 不是内建命令 —— 按 DOS 的规矩当成程序名去找、去跑 */
+    if (run_program(cmd, arg)) return;
 
     con_puts("  Bad command or file name\r\n");
     log_puts("[log] bad command: "); log_puts(cmd); log_puts("\r\n");

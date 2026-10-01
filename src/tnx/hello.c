@@ -1,76 +1,101 @@
 /* ============================================================================
- * TNX 样例程序
+ * hello -- SDK 的活体自检
  *
- * 它不只打印一句话 —— 每一段都在自证一件事：
- *   地址      固定基址加载真的生效了
- *   RODT      只读段是活的
- *   DATA      可写段是活的
- *   BSS       加载器真的清零了
- *   API 表    内核把函数表交过来了
- *   堆        程序能用内核堆
+ * 这个程序存在的唯一意义是**在真机上证明 API v2 是活的**。
+ * 它按顺序验证：固定基址、RODT、DATA、BSS、内核堆、
+ * argv、目录遍历、文件读取、stat。每一项都当场判定并报 OK/FAIL。
  * ==========================================================================*/
 #include "tndrt.h"
 
-#define TNX_BASE   0x0000000001000000ULL
-#define TNX_WINDOW 0x0000000000800000ULL
+static int fails = 0;
 
-static const char g_rodata[] = "  [rodata] read-only section is live\r\n";
-static tnd_u64    g_data_var  = 0;
-static char       g_bss[64];
+static void check(const char *what, int ok) {
+    tnd_printf("  %s  ->  %s\n", what, ok ? "OK" : "FAIL");
+    if (!ok) fails++;
+}
+
+static tnd_u32 gData = 0x11111111u;      /* DATA 段 */
+static tnd_u32 gBss;                     /* BSS，加载器必须清零 */
+static const char gRod[] = "[rodata] read-only section is live";   /* RODT */
 
 int tnx_main(void) {
+    TND_FIND f;
+    TND_STAT st;
+    int fh, found = 0, fd;
+    char buf[256];
+
     tnd_puts("\r\n");
     tnd_puts("  ================================================\r\n");
-    tnd_puts("   Hello from a TNX program\r\n");
+    tnd_puts("   Hello from a TNX program (API v2)\r\n");
     tnd_puts("  ================================================\r\n");
 
-    /* --- 1) 自证加载地址 --- */
+    /* --- 固定基址 --- */
     {
-        tnd_u64 here = (tnd_u64)(tnd_size)(const void *)g_rodata;
-        tnd_puts("  image addr    : "); tnd_putx(here); tnd_puts("\r\n");
-        tnd_puts("  api table     : "); tnd_putx((tnd_u64)(tnd_size)(const void *)&g_rodata);
-        tnd_puts("\r\n");
-        if (here >= TNX_BASE && here < TNX_BASE + TNX_WINDOW)
-            tnd_puts("  fixed base    : inside the 16MiB window          OK\r\n");
-        else
-            tnd_puts("  fixed base    : NOT in the expected window       FAIL\r\n");
+        tnd_u64 here = (tnd_u64)(tnd_size)&gData;
+        tnd_printf("  image addr    : %p\n", here);
+        check("fixed base inside 16MiB window", here >= 0x1000000ULL && here < 0x1800000ULL);
     }
 
-    /* --- 2) 只读段 --- */
-    tnd_puts(g_rodata);
+    /* --- 段 --- */
+    tnd_printf("  %s\n", gRod);
+    gData = 0xABCDEF01u;
+    check("data section read/write", gData == 0xABCDEF01u);
+    check("bss zero-filled by loader", gBss == 0);
 
-    /* --- 3) 可写数据段 --- */
-    g_data_var = 0x123456789ABCDEF0ULL;
-    tnd_puts("  [data]        wrote+read back: "); tnd_putx(g_data_var); tnd_puts("\r\n");
-
-    /* --- 4) BSS 必须已被加载器清零 --- */
-    {
-        int clean = 1;
-        for (int i = 0; i < (int)sizeof(g_bss); i++) if (g_bss[i] != 0) { clean = 0; break; }
-        tnd_puts("  [bss]         ");
-        tnd_puts(clean ? "zero-filled by the loader                 OK\r\n"
-                       : "NOT zero-filled                           FAIL\r\n");
-    }
-
-    /* --- 5) 内核堆 --- */
+    /* --- 堆 --- */
     {
         char *p = (char *)tnd_alloc(128);
-        if (p) {
-            const char *m = "  [heap]        kernel heap reachable from a TNX program\r\n";
-            int i = 0;
-            for (; m[i]; i++) p[i] = m[i];
-            p[i] = 0;
-            tnd_puts(p);
-            tnd_free(p);
-        } else {
-            tnd_puts("  [heap]        allocation FAILED\r\n");
-        }
+        int ok = 0;
+        if (p) { p[0] = 'X'; p[127] = 'Y'; ok = (p[0] == 'X' && p[127] == 'Y'); tnd_free(p); }
+        check("kernel heap reachable", ok);
     }
 
-    /* --- 6) 定时器还没有，API 应当老实返回 0 --- */
-    tnd_puts("  ticks         : "); tnd_putu(tnd_ticks());
-    tnd_puts("   (0 = no timer subsystem yet)\r\n");
+    /* --- argv --- */
+    {
+        int ac = tnd_argc();
+        tnd_printf("  argc = %d", ac);
+        if (ac > 0) tnd_printf("   argv[0] = %s", tnd_argv(0));
+        tnd_printf("\n");
+        check("argv is wired up", ac >= 1 && tnd_strlen(tnd_argv(0)) > 0);
+    }
 
-    tnd_puts("  returning 0\r\n\r\n");
-    return 0;
+    /* --- 目录遍历 --- */
+    fh = tnd_findfirst("*.TNX", &f);
+    if (fh < 0) {
+        check("findfirst(*.TNX)", 0);
+    } else {
+        tnd_printf("  TNX files in current dir:\n");
+        do {
+            tnd_printf("      %s  (%u bytes)\n", f.Name, f.Size);
+            found++;
+        } while (tnd_findnext(fh, &f) == 0);
+        tnd_findclose(fh);
+        check("findfirst/findnext/findclose", found > 0);
+    }
+
+    /* --- stat --- */
+    check("stat(HELLO.TNX)", tnd_stat("HELLO.TNX", &st) == 0 && st.Size > 0);
+    if (st.Size) tnd_printf("  HELLO.TNX size = %u bytes\n", st.Size);
+
+    /* --- 文件读取 --- */
+    fd = tnd_open("AUTOEXEC.BAT", TND_O_RDONLY);
+    if (fd < 0) {
+        check("open(AUTOEXEC.BAT)", 0);
+    } else {
+        tnd_i64 n = tnd_read(fd, buf, sizeof(buf) - 1);
+        tnd_close(fd);
+        if (n > 0) buf[n] = 0;
+        tnd_printf("  read %d bytes from AUTOEXEC.BAT; first line: ", (int)(n > 0 ? n : 0));
+        if (n > 0) {
+            for (int i = 0; i < n && buf[i] != '\n' && buf[i] != '\r'; i++) tnd_putc(buf[i]);
+        }
+        tnd_printf("\n");
+        check("open/read/close a real file", n > 0);
+    }
+
+    /* --- 时间 --- */
+    tnd_printf("  ticks         : %u   (0 = no timer subsystem yet)\n", tnd_ticks());
+
+    tnd_printf("\n  %s\n", fails ? "SOME CHECKS FAILED" : "all checks passed");
+    return fails ? 1 : 0;
 }

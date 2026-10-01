@@ -27,8 +27,11 @@ dir TMP
 del TMP\COPY.TXT
 rd TMP
 echo.
-echo   --- TNX: just type the program name, like DOS ---
+echo   --- TNX program: API v2 self-test ---
 HELLO.TNX
+echo.
+echo   --- same program, with an argument (argv) ---
+HELLO.TNX /verbose
 echo.
 echo   --- extension is optional ---
 HELLO

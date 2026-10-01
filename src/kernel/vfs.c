@@ -135,6 +135,40 @@ EFI_STATUS vfs_open(const char *dos, int write, EFI_FILE_PROTOCOL **out) {
     return s;
 }
 
+/* 带 CREATE 的打开。给 TNX 程序的 TND_O_CREATE 用。 */
+EFI_STATUS vfs_create(const char *dos, EFI_FILE_PROTOCOL **out) {
+    char path[TND_MAX_PATH];
+    CHAR16 wname[TND_MAX_PATH + 4];
+    EFI_STATUS s;
+    TND_DRIVE *d = drive_of(gCurDrive);
+
+    if (out) *out = 0;
+    if (!d || !d->root) return EFI_NOT_FOUND;
+    s = vfs_resolve(dos, path, sizeof(path));
+    if (EFI_ERROR(s)) return s;
+    if (!t_strcmp(path, "\\")) return EFI_ACCESS_DENIED;
+
+    t_ascii_to_u16(path, wname, TND_MAX_PATH + 4);
+    return d->root->Open(d->root, out, wname,
+                         EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+}
+
+/* 截断成 0 字节。UEFI 没有 truncate，靠 SetInfo 把 FileSize 写成 0。 */
+EFI_STATUS vfs_truncate(EFI_FILE_PROTOCOL *f) {
+    static UINT8 info[512];
+    EFI_FILE_INFO *fi = (EFI_FILE_INFO *)info;
+    UINTN sz = sizeof(info);
+    EFI_STATUS s;
+    if (!f) return EFI_INVALID_PARAMETER;
+    s = f->GetInfo(f, &gEfiFileInfoGuid, &sz, info);
+    if (EFI_ERROR(s)) return s;
+    fi->FileSize = 0;
+    /* SetInfo 的参数不是 const（GetInfo 是），要显式转一下 */
+    s = f->SetInfo(f, (EFI_GUID *)&gEfiFileInfoGuid, sz, info);
+    if (!EFI_ERROR(s)) f->SetPosition(f, 0);
+    return s;
+}
+
 int vfs_exists(const char *dos) {
     EFI_FILE_PROTOCOL *f = 0;
     if (EFI_ERROR(vfs_open(dos, 0, &f)) || !f) return 0;

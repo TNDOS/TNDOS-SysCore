@@ -25,6 +25,18 @@ param(
     [switch]$ShowEnv
 )
 $ErrorActionPreference = 'Stop'
+
+# 编译器/linker 的 warning 走 stderr。PowerShell 把原生程序的 stderr 变成 ErrorRecord，
+# 在 'Stop' 模式下这会让**整个构建因为一个 warning 而中止** —— 而且报错看起来
+# 像是编译失败，跟真正的原因毫无关系。
+# 我们只认退出码，所以原生工具一律走这个包装。
+function Invoke-Native([string]$Exe, [string[]]$Arguments) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Exe @Arguments
+    $script:NativeExit = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 # ------------------------------------------------------------ 定位辅助函数
@@ -155,8 +167,8 @@ function Build-Pe([string[]]$Src, [string]$Out) {
            '-fno-stack-protector','-mno-red-zone','-Wall',
            '-Wl,/subsystem:efi_application,/entry:efi_main','-Wl,/machine:x64',
            '-I', $Inc) + $S + @('-o', $Out)
-    & (Join-Path $LLVM_BIN 'clang.exe') @a
-    if ($LASTEXITCODE -ne 0) { throw ("clang 编译失败: " + $Out) }
+    Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $a
+    if ($script:NativeExit -ne 0) { throw ("clang 编译失败: " + $Out) }
     Write-Host ("         -> " + (Get-Item $Out).Length + " bytes")
 }
 
@@ -172,6 +184,7 @@ Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
             (Join-Path $Root 'src\kernel\heap.c'),
             (Join-Path $Root 'src\kernel\drv.c'),
             (Join-Path $Root 'src\kernel\tnx.c'),
+            (Join-Path $Root 'src\kernel\api.c'),
             (Join-Path $Root 'src\kernel\conf.c'),
             (Join-Path $Root 'src\kernel\shell.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
 
@@ -198,8 +211,8 @@ foreach ($c in 'tndrt','hello') {
     $ta = @('-target','x86_64-unknown-none','-ffreestanding','-fno-builtin','-fno-stack-protector',
             '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',$TnxSrc,
             '-c',(Join-Path $TnxSrc ($c + '.c')),'-o',(Join-Path $TnxOut ($c + '.o')))
-    & (Join-Path $LLVM_BIN 'clang.exe') @ta
-    if ($LASTEXITCODE -ne 0) { throw ("clang 编译 TNX 程序失败: " + $c + ".c") }
+    Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $ta
+    if ($script:NativeExit -ne 0) { throw ("clang 编译 TNX 程序失败: " + $c + ".c") }
 }
 
 $lld = Join-Path $LLVM_BIN 'ld.lld.exe'
@@ -207,8 +220,8 @@ if (-not (Test-Path $lld)) { throw ("找不到 ld.lld.exe：" + $lld) }
 Write-Host '  [tnx] ld.lld      -> hello.elf'
 $la = @('-m','elf_x86_64','-T',(Join-Path $TnxSrc 'tnx.ld'),'-o',(Join-Path $TnxOut 'hello.elf'),
         (Join-Path $TnxOut 'tndrt.o'),(Join-Path $TnxOut 'hello.o'))
-& $lld @la
-if ($LASTEXITCODE -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
+Invoke-Native $lld $la
+if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 
 & (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
 

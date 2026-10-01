@@ -7,6 +7,7 @@
 #include "efi.h"
 #include "tnd_utf8.h"
 #include "tnx.h"
+#include "tnd_api.h"   /* TND_API_TABLE —— 程序运行环境的类型 */
 
 /* ---------------------------------------------------------------- 地址图
  * 在此之前 TNDDOS 没有地址规划：PMM 从 1MB 起首次适配地发页，
@@ -82,6 +83,15 @@ int  drv_ok_count(void);
 /* ============================ TNX 加载器 ================================= */
 int  tnx_init(void);
 EFI_STATUS tnx_load(const char *path, int *outCode, int verbose);
+EFI_STATUS tnx_run(const char *path, int argc, char **argv, int *outCode);
+
+/* ============================ 程序运行环境（API v2） ==================== */
+void  api_setup(int argc, char **argv);      /* 程序开跑前：装好 fd 0/1/2 与 argv */
+void  api_teardown(void);                    /* 程序返回后：关掉它没关的句柄 */
+int   api_redirect_stdout(const char *path, int append);   /* 重定向，返回 1 成功 */
+int   api_redirect_stdin(const char *path);
+void  api_restore_stdio(void);
+const TND_API_TABLE *api_get_table(void);
 int  tnx_info(const char *path);
 int  tnx_find(const char *name, char *out, UINTN cap);
 void tnx_report(void);
@@ -97,6 +107,7 @@ void log_kv_u64(const char *k, UINT64 v);
 
 void con_puts(const char *s);
 void con_putc(char c);
+void con_write(const char *s, UINTN n);
 void con_u64(UINT64 v);
 void con_hex(UINT64 v);
 void con_clear(void);
@@ -135,6 +146,8 @@ EFI_STATUS vfs_resolve(const char *dos, char *out, UINTN cap);
 EFI_STATUS vfs_open(const char *dos, int write, EFI_FILE_PROTOCOL **out);
 EFI_STATUS vfs_read_all(const char *dos, char *buf, UINTN cap, UINTN *len);
 int  vfs_exists(const char *dos);
+EFI_STATUS vfs_create(const char *dos, EFI_FILE_PROTOCOL **out);
+EFI_STATUS vfs_truncate(EFI_FILE_PROTOCOL *f);
 int  vfs_dir(const char *dos);
 int  vfs_type(const char *dos);
 int  vfs_mkdir(const char *dos);
