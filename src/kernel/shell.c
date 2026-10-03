@@ -124,6 +124,7 @@ static void cmd_help(void) {
     con_puts("    MODULES           list kernel modules and status\r\n");
     con_puts("    DRIVERS           list loaded drivers\r\n");
     con_puts("    CONSOLE [name]    list or switch console backend (uefi / fb)\r\n");
+    con_puts("    SF [n]            console scale: SF 1.5 = 150%, SF 200 = 200%\r\n");
     con_puts("    LOAD <file>       load a UEFI image (~= load fs0:\\<file>)\r\n");
     con_puts("    <prog> [args]     run a TNX program by name (extension optional)\r\n");
     con_puts("  \r\n  Editing: Up/Down = command history, Left/Right/Home/End = move, Del = delete\r\n");
@@ -232,6 +233,24 @@ static int run_program(const char *cmd, const char *arg) {
     return 0;
 }
 
+/* 解析缩放参数：
+ *   "1.5"  -> 150%   （有小数点，当倍率）
+ *   "200"  -> 200%   （没小数点且 > 8，当百分比）
+ *   "2"    -> 200%   （没小数点且 <= 8，当倍率）
+ * 最后一条是有意的：SF 2 想说 200%，不是 2%。 */
+static int parse_scale(const char *s) {
+    int whole = 0, frac = 0, div = 1, hasDot = 0, any = 0;
+    while (*s == ' ' || *s == 'x' || *s == 'X') s++;
+    while (*s >= '0' && *s <= '9') { whole = whole * 10 + (*s - '0'); s++; any = 1; }
+    if (*s == '.') {
+        hasDot = 1; s++;
+        while (*s >= '0' && *s <= '9' && div < 100) { frac = frac * 10 + (*s - '0'); div *= 10; s++; any = 1; }
+    }
+    if (!any) return 0;
+    if (hasDot) return whole * 100 + (frac * 100) / div;
+    return (whole <= 8) ? whole * 100 : whole;
+}
+
 void shell_exec_line(char *line) {
     char cmd[32];
     UINTN i = 0;
@@ -280,6 +299,25 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "DRIVERS")) { drv_report(); return; }
+    if (!t_stricmp(cmd, "SF")) {
+        if (!*arg) {
+            con_puts("  scale: "); con_u64((UINT64)con_get_scale()); con_puts("%");
+            con_puts("   grid "); con_u64(con_cols()); con_puts("x"); con_u64(con_rows()); con_puts("\r\n");
+            con_puts("  usage: SF 1.5 (=150%)   SF 200 (=200%)   SF 1 (=100%)\r\n");
+        } else {
+            int pct = parse_scale(arg);
+            if (pct <= 0) {
+                con_puts("  bad scale\r\n");
+            } else if (!con_set_scale(pct)) {
+                con_puts("  backend "); con_puts(con_current());
+                con_puts(" does not support scaling\r\n");
+            } else {
+                con_puts("  scale -> "); con_u64((UINT64)con_get_scale()); con_puts("%");
+                con_puts("   grid "); con_u64(con_cols()); con_puts("x"); con_u64(con_rows()); con_puts("\r\n");
+            }
+        }
+        return;
+    }
     if (!t_stricmp(cmd, "CONSOLE")) {
         if (!*arg) {
             con_puts("  console backends:\r\n");

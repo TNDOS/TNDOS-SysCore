@@ -34,6 +34,8 @@ static struct {
     UINT32  *fb;
     UINTN    stride;        /* 每扫描行像素数 */
     UINTN    width, height; /* 像素 */
+    UINTN    cellW, cellH;  /* 缩放后的格子像素尺寸 */
+    int      scalePct;      /* 0 = 自动 */
     UINTN    cols, rows;    /* 字符网格 */
     UINTN    x, y;          /* 光标所在格 */
     UINTN    attr;
@@ -81,13 +83,20 @@ static void fb_draw_cell(UINTN cx, UINTN cy) {
 
     /* 字体只有 256 个字形（CP437）。超出范围画空格，不要越界读。 */
     gl = gFontGlyphHeight ? (gFontVga + (UINTN)ch * gFontGlyphHeight) : 0;
-    px = cx * FB_CELL_W;
-    py = cy * FB_CELL_H;
+    px = cx * gFb.cellW;
+    py = cy * gFb.cellH;
 
-    for (r = 0; r < gFontGlyphHeight && r < FB_CELL_H; r++) {
-        UINT8 bits = gl ? gl[r] : 0;
+    /* 缩放用定点最近邻：目标第 dy 行取源的第 dy*H/cellH 行。
+     * 这样任意比例（1.5 也行）都能整除到位，不会因为四舍五入把笔画弄断。
+     * 保证 gl 那一行取不到时按空行处理 —— 不然放大倍数一大就越界读。 */
+    for (r = 0; r < gFb.cellH; r++) {
+        UINTN sy = (r * gFontGlyphHeight) / gFb.cellH;
+        UINT8 bits = (gl && sy < gFontGlyphHeight) ? gl[sy] : 0;
         UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
-        for (c = 0; c < FB_CELL_W; c++) line[c] = (bits & (0x80 >> c)) ? fg : bg;
+        for (c = 0; c < gFb.cellW; c++) {
+            UINTN sx = (c * 8) / gFb.cellW;
+            line[c] = (bits & (0x80 >> sx)) ? fg : bg;
+        }
     }
 }
 
@@ -100,11 +109,11 @@ static void fb_draw_cursor(int on) {
     attr = gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1];
     col  = on ? fb_pixel(gPal[attr & 0xF]) : 0;
     if (!on) { fb_draw_cell(gFb.x, gFb.y); return; }
-    px = gFb.x * FB_CELL_W;
-    py = gFb.y * FB_CELL_H + FB_CELL_H - 2;
+    px = gFb.x * gFb.cellW;
+    py = gFb.y * gFb.cellH + gFb.cellH - 2;
     for (r = 0; r < 2; r++) {
         UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
-        for (c = 0; c < FB_CELL_W; c++) line[c] = col;
+        for (c = 0; c < gFb.cellW; c++) line[c] = col;
     }
 }
 
@@ -122,6 +131,61 @@ static void fb_scroll(void) {
 /* fb_clear 定义在下面，但 fb_init 要用它（切换过来必须先擦掉固件画的旧像素）。
  * C99 不允许隐式声明，所以在这里先说明一下。 */
 static void fb_clear(void);
+static int  fb_apply_scale(int pct);
+
+/* 换缩放比例。**网格尺寸变了，影子缓冲必须重分配** —— 不重分配就是缓冲区
+ * 溢出，而且症状会是"屏幕上一部分正常、一部分是内存垃圾"。
+ *
+ * pct <= 0 表示自动：挑一个既放得下 80x25、又尽量大的比例。
+ * 1280x800 上自动会选 200%（16x24 的格子，80x33）—— 那正是 DOS 的观感。 */
+static int fb_apply_scale(int pct) {
+    UINTN w, h, cols, rows;
+
+    if (pct <= 0) {
+        /* **先试整数倍。** 点阵按整数倍放大最干净：每个源像素正好铺满 N×N。
+         * 非整数倍（比如 210%）会出现"有的源行占 3 个目标行、有的只占 2 个"，
+         * 笔画粗细不匀 —— 实测在 1280x800 上自动选到 210%，格子变成 16x25，
+         * 就是这个毛病。而 200% 明明也满足 80x25。 */
+        pct = -1;
+        for (int s = 400; s >= 100; s -= 100) {
+            UINTN cw = (FB_CELL_W * (UINTN)s) / 100, ch = (FB_CELL_H * (UINTN)s) / 100;
+            if (!cw || !ch) continue;
+            if (gFb.width / cw >= 80 && gFb.height / ch >= 25) { pct = s; break; }
+        }
+        /* 整数倍都放不下才退到 10% 步进 */
+        if (pct < 0) {
+            pct = 100;
+            for (int s = 190; s >= 100; s -= 10) {
+                UINTN cw = (FB_CELL_W * (UINTN)s) / 100, ch = (FB_CELL_H * (UINTN)s) / 100;
+                if (!cw || !ch) continue;
+                if (gFb.width / cw >= 80 && gFb.height / ch >= 25) { pct = s; break; }
+            }
+        }
+    }
+    if (pct < 25)  pct = 25;
+    if (pct > 800) pct = 800;
+
+    w = (FB_CELL_W * (UINTN)pct) / 100;
+    h = (FB_CELL_H * (UINTN)pct) / 100;
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    cols = gFb.width / w;
+    rows = gFb.height / h;
+    if (cols < 1 || rows < 1) { log_puts("[log] con_fb: scale too large\r\n"); return 0; }
+
+    if (gFb.shadow) { gEnv.BS->FreePool(gFb.shadow); gFb.shadow = 0; }
+    if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, cols * rows * 2, (void **)&gFb.shadow)) || !gFb.shadow) {
+        log_puts("[log] con_fb: out of memory for shadow\r\n");
+        return 0;
+    }
+    gFb.cellW = w; gFb.cellH = h;
+    gFb.cols = cols; gFb.rows = rows;
+    gFb.scalePct = pct;
+    gFb.x = gFb.y = 0;
+    t_memzero(gFb.shadow, cols * rows * 2);
+    fb_clear();
+    return 1;
+}
 
 static int fb_init(void) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
@@ -153,21 +217,14 @@ static int fb_init(void) {
         return 0;
     }
 
-    gFb.cols = gFb.width  / FB_CELL_W;
-    gFb.rows = gFb.height / FB_CELL_H;
     gFb.x = gFb.y = 0;
     gFb.attr = 0x07;
     gFb.cursorOn = 1;
-
-    /* 影子缓冲按实际网格分配，不用固定上限 —— 高分辨率下那个上限会不够 */
-    if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, gFb.cols * gFb.rows * 2, (void **)&gFb.shadow))
-        || !gFb.shadow) {
-        log_puts("[log] con_fb: out of memory for shadow\r\n");
-        return 0;
-    }
-    t_memzero(gFb.shadow, gFb.cols * gFb.rows * 2);
-
+    gFb.scalePct = 0;
     gFb.ok = 1;
+
+    /* 网格、影子缓冲、清屏都在这里做 —— 切缩放时走的是同一条路 */
+    if (!fb_apply_scale(0)) { gFb.ok = 0; return 0; }
 
     /* **必须清屏。**
      * 切换过来的时候帧缓冲上还留着固件 ConOut 画的旧像素，而我们是从
@@ -183,7 +240,8 @@ static int fb_init(void) {
     log_puts(" fmt=");               log_u64((UINT64)info->PixelFormat);
     log_puts(" ppsl=");              log_u64(info->PixelsPerScanLine);
     log_puts(" grid=");              log_u64(gFb.cols); log_puts("x"); log_u64(gFb.rows);
-    log_puts("\r\n");
+    log_puts(" cell=");              log_u64(gFb.cellW); log_puts("x"); log_u64(gFb.cellH);
+    log_puts(" scale=");             log_u64((UINT64)gFb.scalePct); log_puts("%\r\n");
 
     if (gFontGlyphHeight != FB_CELL_H || gFontGlyphWidth != FB_CELL_W) {
         log_puts("[log] con_fb: !! font is not 8x12 -- rendering will be wrong\r\n");
@@ -236,6 +294,9 @@ static void fb_gotoxy(UINTN x, UINTN y) {
 /* 我们自己的光标位置。**和 ConOut 的 Mode 没有任何关系** —— 那边不知道我们画到哪。 */
 static void fb_getxy(UINTN *x, UINTN *y) { if (x) *x = gFb.x; if (y) *y = gFb.y; }
 
+static int  fb_set_scale(int pct) { if (!gFb.ok) return 0; return fb_apply_scale(pct); }
+static int  fb_get_scale(void)    { return gFb.scalePct ? gFb.scalePct : 100; }
+
 static void fb_setattr(UINTN a) { gFb.attr = a & 0xFF; }
 static void fb_cursor(int v)    { gFb.cursorOn = v ? 1 : 0; fb_draw_cursor(gFb.cursorOn); }
 static UINTN fb_cols(void)      { return gFb.cols ? gFb.cols : 80; }
@@ -243,5 +304,5 @@ static UINTN fb_rows(void)      { return gFb.rows ? gFb.rows : 25; }
 
 const TND_CONSOLE gConFb = {
     "fb", fb_init, fb_write, fb_clear, fb_gotoxy, fb_getxy,
-    fb_setattr, fb_cursor, fb_cols, fb_rows
+    fb_setattr, fb_cursor, fb_cols, fb_rows, fb_set_scale, fb_get_scale
 };

@@ -53,7 +53,13 @@ static UINTN uefi_rows(void) {
     return r ? r : 25;
 }
 
+/* 固件的字体和字号由它自己决定，我们改不了 —— 这一项返回 0 表示不支持。
+ * 接口里留着它是为了让"缩放"这件事有一个诚实的答案，而不是让调用方
+ * 去猜当前后端是不是 fb。 */
+static int uefi_set_scale(int pct) { (void)pct; return 0; }
+static int uefi_get_scale(void)    { return 100; }
+
 const TND_CONSOLE gConUefi = {
     "uefi", uefi_init, uefi_write, uefi_clear, uefi_gotoxy, uefi_getxy,
-    uefi_setattr, uefi_cursor, uefi_cols, uefi_rows
+    uefi_setattr, uefi_cursor, uefi_cols, uefi_rows, uefi_set_scale, uefi_get_scale
 };

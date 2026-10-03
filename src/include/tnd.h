@@ -121,6 +121,8 @@ void  con_gotoxy(UINTN x, UINTN y);
  * 结果重画落在错误位置，屏幕上出现 "ddidir" 这种鬼东西（命令本身是对的，
  * 只是显示乱了）。任何"当前光标在哪"的问题，答案只能来自当前后端。 */
 void  con_getxy(UINTN *x, UINTN *y);
+int   con_set_scale(int percent);
+int   con_get_scale(void);
 
 /* ========================= 控制台服务层（M4-SP0）=========================
  * 目的是让内核**不再直接依赖 UEFI 的 ConOut**。
@@ -146,6 +148,11 @@ typedef struct {
     void   (*Cursor)(int visible);
     UINTN  (*Cols)(void);
     UINTN  (*Rows)(void);
+
+    /* 缩放。后端不支持就返回 0（UEFI 的字体由固件决定，改不了）。
+     * 放在接口里而不是让调用方去猜后端是不是 fb —— 那又是绕过服务层。 */
+    int    (*SetScale)(int percent);
+    int    (*GetScale)(void);
 } TND_CONSOLE;
 
 void        con_register(const TND_CONSOLE *c);

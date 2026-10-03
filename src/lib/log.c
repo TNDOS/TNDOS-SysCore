@@ -122,6 +122,9 @@ void con_clear(void)           { if (gCon && gCon->Clear) gCon->Clear(); }
 void  con_gotoxy(UINTN x, UINTN y) { if (gCon && gCon->GotoXY) gCon->GotoXY(x, y); }
 void  con_getxy(UINTN *x, UINTN *y) { if (gCon && gCon->GetXY) gCon->GetXY(x, y); else { if (x) *x = 0; if (y) *y = 0; } }
 
+int   con_set_scale(int pct)   { return (gCon && gCon->SetScale) ? gCon->SetScale(pct) : 0; }
+int   con_get_scale(void)      { return (gCon && gCon->GetScale) ? gCon->GetScale() : 100; }
+
 UINTN con_cols(void)           { return (gCon && gCon->Cols) ? gCon->Cols() : 80; }
 UINTN con_rows(void)           { return (gCon && gCon->Rows) ? gCon->Rows() : 25; }
 
