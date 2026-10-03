@@ -132,6 +132,7 @@ static void fb_scroll(void) {
  * C99 不允许隐式声明，所以在这里先说明一下。 */
 static void fb_clear(void);
 static int  fb_apply_scale(int pct);
+static void fb_draw_cell(UINTN cx, UINTN cy);
 
 /* 换缩放比例。**网格尺寸变了，影子缓冲必须重分配** —— 不重分配就是缓冲区
  * 溢出，而且症状会是"屏幕上一部分正常、一部分是内存垃圾"。
@@ -297,6 +298,101 @@ static void fb_gotoxy(UINTN x, UINTN y) {
 /* 我们自己的光标位置。**和 ConOut 的 Mode 没有任何关系** —— 那边不知道我们画到哪。 */
 static void fb_getxy(UINTN *x, UINTN *y) { if (x) *x = gFb.x; if (y) *y = gFb.y; }
 
+/* ---------------------------------------------------------------- 批量原语
+ * 这三个的价值都在同一件事上：**只重画被改动的那一小块**。
+ * 逐格接口下，EDIT 重画一个 80x25 的窗口要发 2000 次调用，
+ * 每次都可能触发一次全屏重绘 —— 那是性能灾难。 */
+
+static void fb_redraw_region(UINTN x, UINTN y, UINTN w, UINTN h) {
+    UINTN r, c;
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) fb_draw_cell(x + c, y + r);
+}
+
+/* 把矩形裁进屏幕。越界不报错，直接裁 —— 调用方少一堆边界判断。 */
+static int fb_clip(UINTN *x, UINTN *y, UINTN *w, UINTN *h) {
+    if (!gFb.ok || !*w || !*h) return 0;
+    if (*x >= gFb.cols || *y >= gFb.rows) return 0;
+    if (*x + *w > gFb.cols) *w = gFb.cols - *x;
+    if (*y + *h > gFb.rows) *h = gFb.rows - *y;
+    return *w && *h;
+}
+
+static void fb_write_cells(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *cells, UINTN stride) {
+    UINTN r, c;
+    if (!cells) return;
+    if (!fb_clip(&x, &y, &w, &h)) return;
+    fb_draw_cursor(0);
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) {
+            UINTN o = (y + r) * gFb.cols + (x + c);
+            gFb.shadow[o * 2]     = (UINT8)(cells[r * stride + c].Ch   & 0xFF);
+            gFb.shadow[o * 2 + 1] = (UINT8)(cells[r * stride + c].Attr & 0xFF);
+        }
+    fb_redraw_region(x, y, w, h);
+    fb_draw_cursor(gFb.cursorOn);
+}
+
+static void fb_fill(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr) {
+    UINTN r, c;
+    if (!fb_clip(&x, &y, &w, &h)) return;
+    fb_draw_cursor(0);
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) {
+            UINTN o = (y + r) * gFb.cols + (x + c);
+            gFb.shadow[o * 2]     = (UINT8)(ch & 0xFF);
+            gFb.shadow[o * 2 + 1] = (UINT8)(attr & 0xFF);
+        }
+    fb_redraw_region(x, y, w, h);
+    fb_draw_cursor(gFb.cursorOn);
+}
+
+/* 名字带 _region 是为了和上面那个整屏的 fb_scroll(void) 区分开。 */
+static void fb_scroll_region(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN ch, UINTN attr) {
+    UINTN r, c;
+    if (!fb_clip(&x, &y, &w, &h)) return;
+    if (dy == 0) return;
+    fb_draw_cursor(0);
+
+    /* **拷贝方向必须和 dy 的符号一致**，否则源行会被自己覆盖掉：
+     *   dy > 0（内容上移）-> 目标行在上方 -> 从**上往下**搬
+     *   dy < 0（内容下移）-> 目标行在下方 -> 从**下往上**搬
+     * 搞反了就会出现"前半段正确、后半段是重复内容"。 */
+    if (dy > 0) {
+        for (r = 0; r < h; r++) {
+            long src = (long)r + dy;
+            for (c = 0; c < w; c++) {
+                UINTN dst = (y + r) * gFb.cols + (x + c);
+                if (src >= 0 && src < (long)h) {
+                    UINTN s = (y + (UINTN)src) * gFb.cols + (x + c);
+                    gFb.shadow[dst * 2]     = gFb.shadow[s * 2];
+                    gFb.shadow[dst * 2 + 1] = gFb.shadow[s * 2 + 1];
+                } else {
+                    gFb.shadow[dst * 2]     = (UINT8)(ch & 0xFF);
+                    gFb.shadow[dst * 2 + 1] = (UINT8)(attr & 0xFF);
+                }
+            }
+        }
+    } else {
+        for (r = h; r-- > 0; ) {
+            long src = (long)r + dy;
+            for (c = 0; c < w; c++) {
+                UINTN dst = (y + r) * gFb.cols + (x + c);
+                if (src >= 0 && src < (long)h) {
+                    UINTN s = (y + (UINTN)src) * gFb.cols + (x + c);
+                    gFb.shadow[dst * 2]     = gFb.shadow[s * 2];
+                    gFb.shadow[dst * 2 + 1] = gFb.shadow[s * 2 + 1];
+                } else {
+                    gFb.shadow[dst * 2]     = (UINT8)(ch & 0xFF);
+                    gFb.shadow[dst * 2 + 1] = (UINT8)(attr & 0xFF);
+                }
+            }
+        }
+    }
+    fb_redraw_region(x, y, w, h);
+    fb_draw_cursor(gFb.cursorOn);
+}
+
 static int  fb_set_scale(int pct) { if (!gFb.ok) return 0; return fb_apply_scale(pct); }
 static int  fb_get_scale(void)    { return gFb.scalePct ? gFb.scalePct : 100; }
 
@@ -307,5 +403,6 @@ static UINTN fb_rows(void)      { return gFb.rows ? gFb.rows : 25; }
 
 const TND_CONSOLE gConFb = {
     "fb", fb_init, fb_write, fb_clear, fb_gotoxy, fb_getxy,
-    fb_setattr, fb_cursor, fb_cols, fb_rows, fb_set_scale, fb_get_scale
+    fb_setattr, fb_cursor, fb_cols, fb_rows, fb_set_scale, fb_get_scale,
+    fb_write_cells, fb_fill, fb_scroll_region
 };

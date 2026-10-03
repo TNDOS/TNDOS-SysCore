@@ -26,7 +26,7 @@
 
 #define TND_NAME    "TNDDOS"
 #define TND_ALIAS   "2NDDOS"
-#define TND_VERSION "0.3.2-M4-SP0"
+#define TND_VERSION "0.3.2-M4-SP1"
 
 /* 系统文件布局：除 BOOTX64.EFI 外全部在 \EFI\TNDOS\ */
 #define TND_DIR        "\\EFI\\TNDOS"
@@ -121,8 +121,12 @@ void  con_gotoxy(UINTN x, UINTN y);
  * 结果重画落在错误位置，屏幕上出现 "ddidir" 这种鬼东西（命令本身是对的，
  * 只是显示乱了）。任何"当前光标在哪"的问题，答案只能来自当前后端。 */
 void  con_getxy(UINTN *x, UINTN *y);
+UINTN con_get_attr(void);
 int   con_set_scale(int percent);
 int   con_get_scale(void);
+void  con_write_cells(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *cells, UINTN stride);
+void  con_fill(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr);
+void  con_scroll(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN ch, UINTN attr);
 
 /* ========================= 控制台服务层（M4-SP0）=========================
  * 目的是让内核**不再直接依赖 UEFI 的 ConOut**。
@@ -153,6 +157,12 @@ typedef struct {
      * 放在接口里而不是让调用方去猜后端是不是 fb —— 那又是绕过服务层。 */
     int    (*SetScale)(int percent);
     int    (*GetScale)(void);
+
+    /* 批量原语。**后端可以不实现** —— 路由层会用 GotoXY+Write 逐格兜底
+     * （慢但正确）。所以 UEFI 后端一行都不用改，fb 只加快速路径。 */
+    void   (*WriteCells)(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *cells, UINTN stride);
+    void   (*Fill)(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr);
+    void   (*Scroll)(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN ch, UINTN attr);
 } TND_CONSOLE;
 
 void        con_register(const TND_CONSOLE *c);

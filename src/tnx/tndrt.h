@@ -63,7 +63,15 @@ int  tnd_cols(void);
 int  tnd_rows(void);
 void tnd_setattr(int attr);   /* TND_ATTR(fg, bg)，颜色常量见 tnd_api.h */
 int  tnd_getattr(void);
-void tnd_cursor(int visible);   /* UEFI 只能显隐，形状由固件决定 */
+void tnd_cursor(int visible);
+
+/* ---- 批量原语（API v2.4）
+ * 全屏程序请一律用这几个，不要拿 gotoxy+putc 逐格刷屏 ——
+ * 那是调用开销的问题，不是风格问题。 */
+void tnd_write_cells(int x, int y, int w, int h, const TND_CELL *cells, int stride);
+void tnd_fill(int x, int y, int w, int h, int ch, int attr);
+void tnd_scroll(int x, int y, int w, int h, int dy, int ch, int attr);
+void tnd_screen(TND_SCREEN *out);   /* UEFI 只能显隐，形状由固件决定 */
 
 /* --- 内存 / 时间 --- */
 void   *tnd_alloc(tnd_size n);

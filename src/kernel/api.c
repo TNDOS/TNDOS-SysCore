@@ -384,9 +384,39 @@ static TND_ABI void api_setattr(int attr) { con_set_attr((UINTN)(attr & 0xFF)); 
 static TND_ABI void api_cursor(int visible) { con_cursor(visible); }
 
 static TND_ABI int api_getattr(void) {
-    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
-        return (int)gEnv.ST->ConOut->Mode->Attribute;
-    return 0x07;
+    /* **不要读 ConOut->Mode->Attribute。** 切到 fb 之后那是过期值 ——
+     * 和 shell 的光标位置是同一个坑。属性由控制台路由层记账，问它才对。 */
+    return (int)con_get_attr();
+}
+
+/* ---------------------------------------------------------- 批量原语（v2.4） */
+static TND_ABI void api_writecells(int x, int y, int w, int h, const TND_CELL *cells, int stride) {
+    if (w <= 0 || h <= 0 || !cells || stride < w) return;
+    con_write_cells((UINTN)x, (UINTN)y, (UINTN)w, (UINTN)h, cells, (UINTN)stride);
+}
+
+static TND_ABI void api_fill(int x, int y, int w, int h, int ch, int attr) {
+    if (w <= 0 || h <= 0) return;
+    con_fill((UINTN)x, (UINTN)y, (UINTN)w, (UINTN)h, (UINTN)(ch & 0xFF), (UINTN)(attr & 0xFF));
+}
+
+static TND_ABI void api_scroll(int x, int y, int w, int h, int dy, int ch, int attr) {
+    if (w <= 0 || h <= 0) return;
+    con_scroll((UINTN)x, (UINTN)y, (UINTN)w, (UINTN)h, dy, (UINTN)(ch & 0xFF), (UINTN)(attr & 0xFF));
+}
+
+static TND_ABI void api_screen(TND_SCREEN *out) {
+    UINTN cx = 0, cy = 0;
+    if (!out) return;
+    con_getxy(&cx, &cy);
+    out->StructSize    = (tnd_u32)sizeof(TND_SCREEN);
+    out->X             = (int)cx;
+    out->Y             = (int)cy;
+    out->Cols          = (int)con_cols();
+    out->Rows          = (int)con_rows();
+    out->Attr          = (int)con_get_attr();
+    out->CursorVisible = 1;
+    out->Reserved      = 0;
 }
 
 /* ------------------------------------------------------------------ 表 */
@@ -400,7 +430,8 @@ static const TND_API_TABLE gApi = {
     api_alloc, api_free, api_ticks,
     api_cls, api_gotoxy, api_getkey, api_cols, api_rows,
     api_setattr, api_getattr,
-    api_cursor
+    api_cursor,
+    api_writecells, api_fill, api_scroll, api_screen
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

@@ -18,6 +18,12 @@ static const TND_CONSOLE *gBackends[CON_MAX_BACKENDS];
 static int  gBackendCount = 0;
 static const TND_CONSOLE *gCon = 0;
 
+/* 属性由**路由层**自己记着。
+ * 理由和光标一样：ConOut->Mode->Attribute 在切到 fb 之后是过期值，
+ * 而 fb 的当前属性只有它自己知道。让路由层记账，两边就统一了，
+ * 后端也不用各写一遍 —— UEFI 那边本来也读不到自己的当前属性。 */
+static UINTN gConAttr = 0x07;
+
 void log_init(EFI_SYSTEM_TABLE *st) {
     VOID *ser = 0;
     if (st->BootServices && st->BootServices->LocateProtocol) {
@@ -74,6 +80,8 @@ int con_select(const char *name) {
             return 0;
         }
         gCon = gBackends[i];
+        /* 把路由层记着的属性补设给新后端 —— 否则切过去之后颜色会丢掉 */
+        if (gCon->SetAttr) gCon->SetAttr(gConAttr);
         log_puts("[log] console backend = "); log_puts(name); log_puts("\r\n");
         return 1;
     }
@@ -115,7 +123,8 @@ void con_write(const char *s, UINTN n) {
 void con_puts(const char *s) { if (s) con_write(s, t_strlen(s)); }
 void con_putc(char c) { char b[2]; b[0] = c; b[1] = 0; con_puts(b); }
 
-void con_set_attr(UINTN attr)  { if (gCon && gCon->SetAttr) gCon->SetAttr(attr); }
+void con_set_attr(UINTN attr)  { gConAttr = attr & 0xFF; if (gCon && gCon->SetAttr) gCon->SetAttr(gConAttr); }
+UINTN con_get_attr(void)       { return gConAttr; }
 void con_reset_attr(void)      { con_set_attr(0x07); }
 void con_cursor(int visible)   { if (gCon && gCon->Cursor) gCon->Cursor(visible); }
 void con_clear(void)           { if (gCon && gCon->Clear) gCon->Clear(); }
@@ -127,6 +136,48 @@ int   con_get_scale(void)      { return (gCon && gCon->GetScale) ? gCon->GetScal
 
 UINTN con_cols(void)           { return (gCon && gCon->Cols) ? gCon->Cols() : 80; }
 UINTN con_rows(void)           { return (gCon && gCon->Rows) ? gCon->Rows() : 25; }
+
+/* ------------------------------------------------------------ 批量原语
+ * 后端有快速路径就用；没有就逐格兜底。
+ * 兜底路径是**故意保留的** —— UEFI 的 ConOut 本来就只能逐格设属性，
+ * 与其让两个后端都写一遍循环，不如让路由层当那个默认实现。 */
+void con_write_cells(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *cells, UINTN stride) {
+    UINTN r, c;
+    if (!cells) return;
+    if (gCon && gCon->WriteCells) { gCon->WriteCells(x, y, w, h, cells, stride); return; }
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) {
+            con_gotoxy(x + c, y + r);
+            con_set_attr(cells[r * stride + c].Attr);
+            con_putc((char)(cells[r * stride + c].Ch & 0xFF));
+        }
+}
+
+void con_fill(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr) {
+    UINTN r, c;
+    if (gCon && gCon->Fill) { gCon->Fill(x, y, w, h, ch, attr); return; }
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) { con_gotoxy(x + c, y + r); con_set_attr(attr); con_putc((char)ch); }
+}
+
+void con_scroll(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN ch, UINTN attr) {
+    UINTN r, c;
+    if (gCon && gCon->Scroll) { gCon->Scroll(x, y, w, h, dy, ch, attr); return; }
+    /* 兜底：一行一行地搬。UEFI ConOut 没有区域滚动，只能这样。 */
+    for (r = 0; r < h; r++) {
+        long src = (long)r + dy;
+        if (src < 0 || src >= (long)h) {
+            for (c = 0; c < w; c++) { con_gotoxy(x + c, y + r); con_set_attr(attr); con_putc((char)ch); }
+        } else {
+            for (c = 0; c < w; c++) {
+                con_gotoxy(x + c, y + r);
+                /* 读回源行内容做不到（没有读格子的接口），所以兜底只填空行。
+                 * 这是**已知的降级**，不是 bug —— 真正要滚动的程序请用 fb 后端。 */
+                con_set_attr(attr); con_putc((char)ch);
+            }
+        }
+    }
+}
 
 void con_u64(UINT64 v) { char b[24]; t_utoa(v, b); con_puts(b); }
 

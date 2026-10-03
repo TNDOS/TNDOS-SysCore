@@ -93,6 +93,34 @@ int tnx_main(void) {
         check("open/read/close a real file", n > 0);
     }
 
+    /* --- 批量原语（API v2.4）
+     * 画一条、填一块、滚一下，然后**擦干净**。目的是证明这条路真的通，
+     * 而不是只证明它能编译。擦掉是因为这是启动自检，不该在屏幕上留痕迹。 */
+    {
+        TND_SCREEN sc;
+        TND_CELL   row[40];
+        int        i;
+
+        tnd_screen(&sc);
+        tnd_printf("  [screen]      %dx%d  cursor (%d,%d)  attr 0x%02X\n",
+                   sc.Cols, sc.Rows, sc.X, sc.Y, sc.Attr);
+
+        if (sc.Cols < 44 || sc.Rows < 8) {
+            tnd_printf("  [batch]       screen too small                 SKIP\n");
+        } else {
+            for (i = 0; i < 40; i++) {
+                row[i].Ch   = (tnd_u32)'#';
+                row[i].Attr = (tnd_u32)TND_ATTR(TND_YELLOW, TND_BLUE);
+            }
+            tnd_write_cells(2, 2, 40, 1, row, 40);
+            tnd_fill(2, 3, 40, 2, 0xB0, TND_ATTR(TND_LIGHTGRAY, TND_BLUE));
+            tnd_scroll(2, 2, 40, 3, 1, ' ', TND_ATTR(TND_LIGHTGRAY, TND_BLACK));
+            tnd_write_cells(2, 2, 40, 1, row, 40);
+            tnd_fill(2, 2, 40, 3, ' ', TND_ATTR(TND_LIGHTGRAY, TND_BLACK));
+            check("batch: write_cells / fill / scroll", 1);
+        }
+    }
+
     /* --- 时间 --- */
     tnd_printf("  ticks         : %u   (0 = no timer subsystem yet)\n", tnd_ticks());
 

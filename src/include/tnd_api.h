@@ -40,7 +40,7 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020300u
+#define TND_API_VERSION 0x00020400u
 
 /* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
  * 没法照搬，固件给什么形状就是什么形状。
@@ -130,6 +130,24 @@ typedef struct {
     tnd_u32 Reserved;
 } TND_FIND;
 
+/* --------------------------------------------------- 批量原语用的类型（v2.4）
+ * 对照 Win32 控制台的 CHAR_INFO：一个格子 = 字符 + 属性。 */
+typedef struct {
+    tnd_u32 Ch;      /* 字符。现在只用低 8 位（CP437）；宽字符是下一步 */
+    tnd_u32 Attr;    /* TND_ATTR(fg, bg) */
+} TND_CELL;
+
+/* 屏幕状态一次拿全 —— 对照 GetConsoleScreenBufferInfo。
+ * 分开问 cols/rows/getattr/getxy 要四次调用，每次重画都问一遍太浪费。 */
+typedef struct {
+    tnd_u32 StructSize;
+    int     X, Y;            /* 光标所在格 */
+    int     Cols, Rows;      /* 网格 */
+    int     Attr;            /* 当前属性 */
+    int     CursorVisible;
+    tnd_u32 Reserved;
+} TND_SCREEN;
+
 /* ------------------------------------------------------------------ API 表 */
 typedef struct {
     tnd_u32 StructSize;
@@ -184,6 +202,20 @@ typedef struct {
 
     /* --- 光标（v2.3 追加）--- */
     void (*TND_ABI cursor)(int visible);
+
+    /* --- 批量原语（v2.4 追加）
+     * 对照 Win32 控制台：WriteConsoleOutput / FillConsoleOutputCharacter /
+     * ScrollConsoleScreenBuffer / GetConsoleScreenBufferInfo。
+     * microsoft/edit 用的就是那一套（windows-sys 的 Win32_System_Console）。
+     *
+     * 为什么必须有：EDIT 这类程序每次重画几百个格子。逐格 gotoxy + putc
+     * 光是调用开销就吃掉一切 —— 这不是"高级功能"，是性能底线。
+     *
+     * 坐标一律相对屏幕左上角，越界部分自动裁掉，不报错。 */
+    void (*TND_ABI writecells)(int x, int y, int w, int h, const TND_CELL *cells, int stride);
+    void (*TND_ABI fill)      (int x, int y, int w, int h, int ch, int attr);
+    void (*TND_ABI scroll)    (int x, int y, int w, int h, int dy, int ch, int attr);
+    void (*TND_ABI screen)    (TND_SCREEN *out);   /* 返回 StructSize 填充后的状态 */
 
 } TND_API_TABLE;
 
