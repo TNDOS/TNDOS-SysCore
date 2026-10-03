@@ -179,7 +179,8 @@ function Build-Pe([string[]]$Src, [string]$Out) {
     Write-Host ("         -> " + (Get-Item $Out).Length + " bytes")
 }
 
-$LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\status.c','src\lib\file.c','src\lib\guid.c') |
+$LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\status.c','src\lib\file.c','src\lib\guid.c',
+              'src\lib\con_uefi.c','src\lib\con_fb.c','src\lib\fontvga.c') |
           ForEach-Object { Join-Path $Root $_ }
 
 Write-Host '=== TNDDOS build ==='

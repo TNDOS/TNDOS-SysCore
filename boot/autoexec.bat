@@ -74,3 +74,12 @@ echo.
 echo   EDIT is interactive, so a batch file must not start it.
 echo   Run it by hand:   EDIT TNDOS.TXT      F2 saves, ESC quits
 echo.
+echo   --- console backends ---
+CONSOLE
+echo.
+echo   --- switching to the framebuffer console ---
+CONSOLE fb
+echo   If you can read this, TNDDOS is drawing the pixels itself.
+echo   Type CONSOLE uefi to switch back.
+DIR
+echo.

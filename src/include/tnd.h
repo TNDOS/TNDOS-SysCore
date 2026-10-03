@@ -26,7 +26,7 @@
 
 #define TND_NAME    "TNDDOS"
 #define TND_ALIAS   "2NDDOS"
-#define TND_VERSION "0.3.2"
+#define TND_VERSION "0.3.2-M4-SP0"
 
 /* 系统文件布局：除 BOOTX64.EFI 外全部在 \EFI\TNDOS\ */
 #define TND_DIR        "\\EFI\\TNDOS"
@@ -111,6 +111,43 @@ void con_write(const char *s, UINTN n);
 void con_set_attr(UINTN attr);
 void con_reset_attr(void);
 void con_cursor(int visible);
+UINTN con_cols(void);
+UINTN con_rows(void);
+
+/* ========================= 控制台服务层（M4-SP0）=========================
+ * 目的是让内核**不再直接依赖 UEFI 的 ConOut**。
+ *
+ * 为什么必须分层：ExitBootServices 之后 ConOut 会跟着 Boot Services 一起消失，
+ * 而输出是唯一能告诉你"为什么崩了"的东西。所以后端必须可换，而且要能提前换。
+ *
+ * 现在已经有两个后端：
+ *   uefi   走 ConOut（默认，成熟）
+ *   fb     自己写 framebuffer（GOP 取地址 + 内嵌字体画字）
+ *
+ * 接口约定：Write 收到的是**已经做过换行翻译**的字节流（\n -> \r\n 在
+ * console.c 那一层做完），而且可能含 \0，所以必须带长度、不能靠 strlen。
+ * UTF-8 -> 字形的转换由各后端自己负责 —— UEFI 要转 UCS-2，fb 要查码点。 */
+typedef struct {
+    const char *Name;
+    int    (*Init)(void);                        /* 0 = 失败，后端保持不可用 */
+    void   (*Write)(const char *s, UINTN n);
+    void   (*Clear)(void);
+    void   (*GotoXY)(UINTN x, UINTN y);
+    void   (*SetAttr)(UINTN attr);               /* DOS 属性字节：fg | bg<<4 */
+    void   (*Cursor)(int visible);
+    UINTN  (*Cols)(void);
+    UINTN  (*Rows)(void);
+} TND_CONSOLE;
+
+void        con_register(const TND_CONSOLE *c);
+int         con_select(const char *name);        /* 1 = 成功 */
+const char *con_current(void);
+void        con_report(void);                    /* 列出后端；当前那个打 * */
+
+/* 内置的两个后端。注册在 log_init 里，但只**选中** uefi ——
+ * fb 要等内核堆就绪、用户显式要求时才 Init（它要分配影子缓冲）。 */
+extern const TND_CONSOLE gConUefi;
+extern const TND_CONSOLE gConFb;
 void con_u64(UINT64 v);
 void con_hex(UINT64 v);
 void con_clear(void);

@@ -36,11 +36,9 @@ typedef UINT64 EFI_VIRTUAL_ADDRESS;
 #define EFI_UNSUPPORTED      0x8000000000000003ULL
 #define EFI_BAD_BUFFER_SIZE  0x8000000000000004ULL
 #define EFI_BUFFER_TOO_SMALL 0x8000000000000005ULL
-#define EFI_WRITE_PROTECTED  0x8000000000000008ULL
 #define EFI_OUT_OF_RESOURCES 0x8000000000000009ULL
 #define EFI_VOLUME_CORRUPTED 0x800000000000000AULL
 #define EFI_VOLUME_FULL      0x800000000000000BULL
-#define EFI_NO_MEDIA         0x800000000000000CULL
 #define EFI_ACCESS_DENIED    0x800000000000000FULL
 #define EFI_OUT_OF_RESOURCES 0x8000000000000009ULL
 #define EFI_ERROR(s)   (((INTN)(s)) < 0)
@@ -309,6 +307,56 @@ typedef struct EFI_SYSTEM_TABLE {
 extern const EFI_GUID gEfiLoadedImageProtocolGuid;
 extern const EFI_GUID gEfiSimpleFileSystemProtocolGuid;
 extern const EFI_GUID gEfiSerialIoProtocolGuid;
+extern const EFI_GUID gEfiGraphicsOutputProtocolGuid;
 extern const EFI_GUID gEfiFileInfoGuid;
 
+
+/* ============================ GOP（图形输出）================================
+ * 为什么现在才加：以前全靠 ConOut 显示文本，用不上图形。
+ * 一旦要"自己画字"，就必须拿到帧缓冲的地址和格式。
+ *
+ * **关键认识**：GOP 协议本身是 Boot Services，ExitBootServices 之后就调用不了了。
+ * 但 FrameBufferBase 指向的那块**内存**还在。所以要在 Exit 之前把
+ * Base / Size / PixelsPerScanLine / PixelFormat 这几个值抄下来存好，
+ * 之后自己按 Base + y*Stride + x 写像素。
+ * ==========================================================================*/
+#define EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID \
+    { 0x9042A9DE, 0x23DC, 0x4A38, { 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A } }
+
+typedef struct { UINT32 RedMask, GreenMask, BlueMask, ReservedMask; } EFI_PIXEL_BITMASK;
+
+typedef enum {
+    PixelRedGreenBlueReserved8BitPerColor,   /* 内存序 R,G,B,X -> LE u32 = 0xXXBBGGRR */
+    PixelBlueGreenRedReserved8BitPerColor,   /* 内存序 B,G,R,X -> LE u32 = 0xXXRRGGBB */
+    PixelBitMask,                            /* 用 PixelInformation 里的掩码 */
+    PixelBltOnly                             /* 只能通过 Blt 画 —— 我们**不支持** */
+} EFI_GRAPHICS_PIXEL_FORMAT;
+
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
+    EFI_PIXEL_BITMASK PixelInformation;
+    UINT32 PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
+    UINT32 MaxMode;
+    UINT32 Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+    UINTN  SizeOfInfo;
+    UINT64 FrameBufferBase;
+    UINTN  FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct _EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+struct _EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    EFI_STATUS (*QueryMode)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32, UINTN *, EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **); /*  0 */
+    EFI_STATUS (*SetMode)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, UINT32);                                                      /*  8 */
+    EFI_STATUS (*Blt)(void *);                                                                                          /* 16（不用，占位）*/
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;                                                                            /* 24 */
+};
+
+/* 控制台后端接口的公共部分（服务层的具体实现见 lib/con_*.c）*/
 #endif /* TND_EFI_H */

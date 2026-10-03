@@ -123,6 +123,7 @@ static void cmd_help(void) {
     con_puts("    MEMTEST           run memory self-tests\r\n");
     con_puts("    MODULES           list kernel modules and status\r\n");
     con_puts("    DRIVERS           list loaded drivers\r\n");
+    con_puts("    CONSOLE [name]    list or switch console backend (uefi / fb)\r\n");
     con_puts("    LOAD <file>       load a UEFI image (~= load fs0:\\<file>)\r\n");
     con_puts("    <prog> [args]     run a TNX program by name (extension optional)\r\n");
     con_puts("  \r\n  Editing: Up/Down = command history, Left/Right/Home/End = move, Del = delete\r\n");
@@ -279,6 +280,25 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "DRIVERS")) { drv_report(); return; }
+    if (!t_stricmp(cmd, "CONSOLE")) {
+        if (!*arg) {
+            con_puts("  console backends:\r\n");
+            con_report();
+            con_puts("  current: "); con_puts(con_current());
+            con_puts("  ("); con_u64(con_cols()); con_puts("x"); con_u64(con_rows()); con_puts(")\r\n");
+        } else {
+            /* 先打招呼 —— 切到 fb 之后 ConOut 那边就没输出了 */
+            con_puts("  switching console to "); con_puts(arg); con_puts(" ...\r\n");
+            if (con_select(arg)) {
+                con_puts("  now using: "); con_puts(con_current()); con_puts("\r\n");
+                log_puts("[log] shell CONSOLE -> "); log_puts(con_current()); log_puts("\r\n");
+            } else {
+                con_puts("  FAILED. staying on "); con_puts(con_current()); con_puts("\r\n");
+                log_puts("[log] shell CONSOLE switch FAILED\r\n");
+            }
+        }
+        return;
+    }
     if (!t_stricmp(cmd, "LOAD")) {
         if (!*arg) { con_puts("  usage: LOAD <driver file>\r\n"); return; }
         if (EFI_ERROR(drv_load(arg))) con_puts("  load failed\r\n");
