@@ -83,9 +83,6 @@ echo   If you can read this, TNDDOS is drawing the pixels itself.
 echo   Type CONSOLE uefi to switch back.
 DIR
 echo.
-echo   --- scale: 8x12 is too small on a 1280x800 panel ---
+echo   --- console scale: SF 1.5 = 150%, SF auto = fit 80x25 ---
 SF
-echo   --- now at 200% (16x24 cells, a DOS-like grid) ---
-SF 2
-DIR
 echo.

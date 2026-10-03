@@ -246,7 +246,7 @@ static int parse_scale(const char *s) {
         hasDot = 1; s++;
         while (*s >= '0' && *s <= '9' && div < 100) { frac = frac * 10 + (*s - '0'); div *= 10; s++; any = 1; }
     }
-    if (!any) return 0;
+    if (!any) return -1;
     if (hasDot) return whole * 100 + (frac * 100) / div;
     return (whole <= 8) ? whole * 100 : whole;
 }
@@ -303,10 +303,10 @@ void shell_exec_line(char *line) {
         if (!*arg) {
             con_puts("  scale: "); con_u64((UINT64)con_get_scale()); con_puts("%");
             con_puts("   grid "); con_u64(con_cols()); con_puts("x"); con_u64(con_rows()); con_puts("\r\n");
-            con_puts("  usage: SF 1.5 (=150%)   SF 200 (=200%)   SF 1 (=100%)\r\n");
+            con_puts("  usage: SF 1.5 (=150%)  SF 200 (=200%)  SF 1 (=100%)  SF auto (fit 80x25)\r\n");
         } else {
-            int pct = parse_scale(arg);
-            if (pct <= 0) {
+            int pct = t_stricmp(arg, "auto") ? parse_scale(arg) : 0;
+            if (pct < 0) {
                 con_puts("  bad scale\r\n");
             } else if (!con_set_scale(pct)) {
                 con_puts("  backend "); con_puts(con_current());
