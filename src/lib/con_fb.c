@@ -17,6 +17,14 @@
 #define FB_CELL_W 8
 #define FB_CELL_H 12
 
+/* 影子缓冲里每个格子只有一个字节，装不下码点，所以约定三个**哨兵**：
+ *   0x01 全角字符的左半   0x02 全角字符的右半   0x03 有字宽但还没字形
+ * 代价是 CP437 的 0x01-0x03（三个笑脸）不显示了 —— 控制字符本来也不该打印。
+ * 等 CJK 点阵字体接上来，0x03 会被真字形替掉，哨兵机制本身不用改。 */
+#define FB_WIDE_L  0x01
+#define FB_WIDE_R  0x02
+#define FB_UNKNOWN 0x03
+
 extern const UINT8  gFontVga[];
 extern const UINTN  gFontGlyphWidth;
 extern const UINTN  gFontGlyphHeight;
@@ -82,9 +90,26 @@ static void fb_draw_cell(UINTN cx, UINTN cy) {
     bg   = fb_pixel(gPal[(attr >> 4) & 0xF]);
 
     /* 字体只有 256 个字形（CP437）。超出范围画空格，不要越界读。 */
-    gl = gFontGlyphHeight ? (gFontVga + (UINTN)ch * gFontGlyphHeight) : 0;
     px = cx * gFb.cellW;
     py = cy * gFb.cellH;
+
+    /* 哨兵格：画一个占位框，而不是空白。
+     * 空白看起来像"丢了字符"，框看起来像"这里有个字，只是还没有字形" ——
+     * 调试时这两个的差别很大。全角的左右两半各画自己那一侧，合起来是一个框。 */
+    if (ch >= FB_WIDE_L && ch <= FB_UNKNOWN) {
+        for (r = 0; r < gFb.cellH; r++) {
+            UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
+            int top = (r == 0), bot = (r == gFb.cellH - 1);
+            for (c = 0; c < gFb.cellW; c++) {
+                int left  = (c == 0)               && (ch != FB_WIDE_R);
+                int right = (c == gFb.cellW - 1)   && (ch != FB_WIDE_L);
+                line[c] = (top || bot || left || right) ? fg : bg;
+            }
+        }
+        return;
+    }
+
+    gl = gFontGlyphHeight ? (gFontVga + (UINTN)ch * gFontGlyphHeight) : 0;
 
     /* 缩放用定点最近邻：目标第 dy 行取源的第 dy*H/cellH 行。
      * 这样任意比例（1.5 也行）都能整除到位，不会因为四舍五入把笔画弄断。
@@ -253,24 +278,61 @@ static int fb_init(void) {
     return 1;
 }
 
-static void fb_write(const char *s, UINTN n) {
-    if (!gFb.ok || !s) return;
-    fb_draw_cursor(0);
-    for (UINTN i = 0; i < n; i++) {
-        char c = s[i];
-        if (c == '\r') { gFb.x = 0; continue; }
-        if (c == '\n') {
-            gFb.x = 0;
-            if (++gFb.y >= gFb.rows) { gFb.y = gFb.rows - 1; fb_scroll(); }
-            continue;
-        }
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = (UINT8)c;
+/* 换行。全角字符放不下时也要用它 —— 全角不能跨行拆成两半。 */
+static void fb_newline(void) {
+    gFb.x = 0;
+    if (++gFb.y >= gFb.rows) { gFb.y = gFb.rows - 1; fb_scroll(); }
+}
+
+/* 把一个码点放进当前格。
+ * **这就是"宽字符"的全部**：字宽决定占几格，字体只决定长什么样。
+ * 所以 CJK 点阵字体到位之前，排版就已经是对的了。 */
+static void fb_put_cp(UINT32 cp) {
+    int w = t_char_width(cp);
+
+    if (w == 0) return;                 /* 组合字符：暂不叠加，也不占格 */
+
+    if (w == 2) {
+        /* 右边那一格放不下就整体换行 —— 全角字符被拆开比换行难看得多 */
+        if (gFb.x + 1 >= gFb.cols) fb_newline();
+        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = FB_WIDE_L;
         gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
         fb_draw_cell(gFb.x, gFb.y);
-        if (++gFb.x >= gFb.cols) {
-            gFb.x = 0;
-            if (++gFb.y >= gFb.rows) { gFb.y = gFb.rows - 1; fb_scroll(); }
+        gFb.x++;
+        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = FB_WIDE_R;
+        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
+        fb_draw_cell(gFb.x, gFb.y);
+        gFb.x++;
+    } else {
+        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = (cp <= 0xFF) ? (UINT8)cp : FB_UNKNOWN;
+        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
+        fb_draw_cell(gFb.x, gFb.y);
+        gFb.x++;
+    }
+
+    if (gFb.x >= gFb.cols) fb_newline();
+}
+
+static void fb_write(const char *s, UINTN n) {
+    UINTN i = 0;
+    if (!gFb.ok || !s) return;
+    fb_draw_cursor(0);
+    while (i < n) {
+        char c = s[i];
+        UINT32 cp;
+
+        if (c == '\r') { gFb.x = 0; i++; continue; }
+        if (c == '\n') { fb_newline(); i++; continue; }
+
+        /* ASCII 直接走，只有多字节才解码 —— 绝大多数输出是 ASCII，
+         * 让快路径保持快的。 */
+        if ((UINT8)c < 0x80) { cp = (UINT32)(UINT8)c; i++; }
+        else {
+            int len = t_utf8_decode(s + i, &cp);
+            if (len < 1) len = 1;
+            i += (UINTN)len;
         }
+        fb_put_cp(cp);
     }
     fb_draw_cursor(gFb.cursorOn);
 }

@@ -122,6 +122,12 @@ void  con_gotoxy(UINTN x, UINTN y);
  * 只是显示乱了）。任何"当前光标在哪"的问题，答案只能来自当前后端。 */
 void  con_getxy(UINTN *x, UINTN *y);
 UINTN con_get_attr(void);
+
+/* ---- Unicode 基础（lib/uni.c）
+ * 字宽和字体无关：字体决定"画成什么样"，字宽决定"占几格"。
+ * 中文排版错位是布局问题，不是字形问题 —— 所以这两件事要分开修。 */
+int t_utf8_decode(const char *s, UINT32 *outCp);   /* 返回消耗字节数 */
+int t_char_width(UINT32 cp);                        /* 0=组合 1=半角 2=全角 */
 int   con_set_scale(int percent);
 int   con_get_scale(void);
 void  con_write_cells(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *cells, UINTN stride);
