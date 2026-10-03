@@ -209,24 +209,46 @@ foreach ($d in 'vga','kbd') {
 # TNX 示例程序：clang -> ELF64 -> ld.lld -> tnxpack -> TNX
 # TNX 不需要自己的编译器和链接器，工具链还是 clang / lld，
 # tnxpack 只负责最后一步（ELF64 -> TNX）。
+#
+# **源在 SDK 里，本仓库不留副本。**
+# 以前 src\tnx\ 下有一份 tndrt/hello/tnx.ld 的拷贝，构建用的是那份，
+# SDK 里那份只是镜像 —— 两边静默分叉之后，改 SDK 不进构建，而且毫无提示。
+# 一个会漂移的镜像比一个明确的依赖更糟，所以这里直接依赖 SDK。
 # ---------------------------------------------------------------------------
-$TnxSrc = Join-Path $Root 'src\tnx'
+$SDK = Get-EnvPath 'TNDDOS_SDK'
+if (-not $SDK) {
+    foreach ($guess in @((Join-Path $Root 'repos\TNDOS-SDK'),
+                         (Join-Path (Split-Path $Root) 'TNDOS-SDK'))) {
+        if (Test-Path (Join-Path $guess 'lib\tndrt.c')) { $SDK = (Get-Item $guess).FullName; break }
+    }
+}
+if (-not $SDK -or -not (Test-Path (Join-Path $SDK 'lib\tndrt.c'))) {
+    throw ("找不到 TNDOS-SDK（TNDDOS_SDK 未设置）。" + [char]10 +
+           "TNX 的运行时 tndrt.c、示例程序和链接脚本都住在 SDK 里，" + [char]10 +
+           "构建需要它：  " + '$' + "env:TNDDOS_SDK = '<TNDOS-SDK 的路径>'")
+}
+Write-Host ("  SDK        " + $SDK)
+
 $TnxOut = Join-Path $Build 'tnx'
 New-Item -ItemType Directory -Force -Path $TnxOut | Out-Null
 
-foreach ($c in 'tndrt','hello') {
-    Write-Host ("  [tnx] " + $c + ".c   -> " + $c + ".o")
+$TnxUnits = @(
+    @{ Name = 'tndrt'; Src = (Join-Path $SDK 'lib\tndrt.c') },
+    @{ Name = 'hello'; Src = (Join-Path $SDK 'examples\hello\hello.c') }
+)
+foreach ($u in $TnxUnits) {
+    Write-Host ("  [tnx] " + $u.Name + ".c   -> " + $u.Name + ".o")
     $ta = @('-target','x86_64-unknown-none','-ffreestanding','-fno-builtin','-fno-stack-protector',
-            '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',$TnxSrc,
-            '-c',(Join-Path $TnxSrc ($c + '.c')),'-o',(Join-Path $TnxOut ($c + '.o')))
+            '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',(Join-Path $SDK 'lib'),
+            '-c',$u.Src,'-o',(Join-Path $TnxOut ($u.Name + '.o')))
     Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $ta
-    if ($script:NativeExit -ne 0) { throw ("clang 编译 TNX 程序失败: " + $c + ".c") }
+    if ($script:NativeExit -ne 0) { throw ("clang 编译 TNX 程序失败: " + $u.Src) }
 }
 
 $lld = Join-Path $LLVM_BIN 'ld.lld.exe'
 if (-not (Test-Path $lld)) { throw ("找不到 ld.lld.exe：" + $lld) }
 Write-Host '  [tnx] ld.lld      -> hello.elf'
-$la = @('-m','elf_x86_64','-T',(Join-Path $TnxSrc 'tnx.ld'),'-o',(Join-Path $TnxOut 'hello.elf'),
+$la = @('-m','elf_x86_64','-T',(Join-Path $SDK 'linker\tnx.ld'),'-o',(Join-Path $TnxOut 'hello.elf'),
         (Join-Path $TnxOut 'tndrt.o'),(Join-Path $TnxOut 'hello.o'))
 Invoke-Native $lld $la
 if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
