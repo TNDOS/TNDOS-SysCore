@@ -113,6 +113,14 @@ void con_reset_attr(void);
 void con_cursor(int visible);
 UINTN con_cols(void);
 UINTN con_rows(void);
+void  con_gotoxy(UINTN x, UINTN y);
+
+/* **光标位置也必须走后端接口。**
+ * 教训：shell 的行编辑原来直接读 gEnv.ST->ConOut->Mode->CursorColumn/Row，
+ * 切到 fb 之后那是**过期值** —— 我们自己写像素，从来没通知过 ConOut。
+ * 结果重画落在错误位置，屏幕上出现 "ddidir" 这种鬼东西（命令本身是对的，
+ * 只是显示乱了）。任何"当前光标在哪"的问题，答案只能来自当前后端。 */
+void  con_getxy(UINTN *x, UINTN *y);
 
 /* ========================= 控制台服务层（M4-SP0）=========================
  * 目的是让内核**不再直接依赖 UEFI 的 ConOut**。
@@ -133,6 +141,7 @@ typedef struct {
     void   (*Write)(const char *s, UINTN n);
     void   (*Clear)(void);
     void   (*GotoXY)(UINTN x, UINTN y);
+    void   (*GetXY)(UINTN *x, UINTN *y);
     void   (*SetAttr)(UINTN attr);               /* DOS 属性字节：fg | bg<<4 */
     void   (*Cursor)(int visible);
     UINTN  (*Cols)(void);

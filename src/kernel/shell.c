@@ -430,16 +430,14 @@ static void hist_add(const char *line) {
 static void redraw_line(UINTN col, UINTN row, const char *line, UINTN n, UINTN pos, UINTN *maxLen) {
     char tmp[TND_MAX_LINE + 8];
     UINTN i, t = 0;
-    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *o = gEnv.ST->ConOut;
-
     for (i = 0; i < n; i++) tmp[t++] = line[i];
     for (i = n; i < *maxLen; i++) tmp[t++] = ' ';
     tmp[t] = 0;
 
-    o->SetCursorPosition(o, col, row);
+    con_gotoxy(col, row);
     con_puts(tmp);
     if (n > *maxLen) *maxLen = n;
-    o->SetCursorPosition(o, col + pos, row);
+    con_gotoxy(col + pos, row);
 }
 
 static void read_line(char *line, UINTN cap) {
@@ -451,8 +449,9 @@ static void read_line(char *line, UINTN cap) {
     line[0] = 0;
     saved[0] = 0;
 
-    startCol = gEnv.ST->ConOut->Mode->CursorColumn;
-    row      = gEnv.ST->ConOut->Mode->CursorRow;
+    /* 必须问**当前后端**，不能读 ConOut->Mode ——
+     * 切到 fb 之后那个值是过期的，重画会落错位置（实测出过 "ddidir"）。 */
+    con_getxy(&startCol, &row);
 
     for (;;) {
         EFI_INPUT_KEY k;
@@ -491,7 +490,7 @@ static void read_line(char *line, UINTN cap) {
 
         if (k.UnicodeChar == '\r' || k.UnicodeChar == '\n') {
             /* 先跳到行尾再换行，否则光标停在中间、后面的输出会盖住这行 */
-            gEnv.ST->ConOut->SetCursorPosition(gEnv.ST->ConOut, startCol + n, row);
+            con_gotoxy(startCol + n, row);
             con_puts("\r\n");
             break;
         }

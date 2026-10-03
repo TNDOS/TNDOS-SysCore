@@ -119,6 +119,9 @@ void con_set_attr(UINTN attr)  { if (gCon && gCon->SetAttr) gCon->SetAttr(attr);
 void con_reset_attr(void)      { con_set_attr(0x07); }
 void con_cursor(int visible)   { if (gCon && gCon->Cursor) gCon->Cursor(visible); }
 void con_clear(void)           { if (gCon && gCon->Clear) gCon->Clear(); }
+void  con_gotoxy(UINTN x, UINTN y) { if (gCon && gCon->GotoXY) gCon->GotoXY(x, y); }
+void  con_getxy(UINTN *x, UINTN *y) { if (gCon && gCon->GetXY) gCon->GetXY(x, y); else { if (x) *x = 0; if (y) *y = 0; } }
+
 UINTN con_cols(void)           { return (gCon && gCon->Cols) ? gCon->Cols() : 80; }
 UINTN con_rows(void)           { return (gCon && gCon->Rows) ? gCon->Rows() : 25; }
 

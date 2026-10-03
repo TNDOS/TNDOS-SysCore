@@ -37,6 +37,11 @@ static void uefi_gotoxy(UINTN x, UINTN y) { if (gOut && gOut->SetCursorPosition)
 static void uefi_setattr(UINTN a) { if (gOut && gOut->SetAttribute) gOut->SetAttribute(gOut, a); }
 static void uefi_cursor(int v)    { if (gOut && gOut->EnableCursor) gOut->EnableCursor(gOut, v ? 1 : 0); }
 
+static void uefi_getxy(UINTN *x, UINTN *y) {
+    if (x) *x = (gOut && gOut->Mode) ? (UINTN)gOut->Mode->CursorColumn : 0;
+    if (y) *y = (gOut && gOut->Mode) ? (UINTN)gOut->Mode->CursorRow : 0;
+}
+
 static UINTN uefi_cols(void) {
     UINTN c = 80, r = 25;
     if (gOut && gOut->Mode) gOut->QueryMode(gOut, gOut->Mode->Mode, &c, &r);
@@ -49,6 +54,6 @@ static UINTN uefi_rows(void) {
 }
 
 const TND_CONSOLE gConUefi = {
-    "uefi", uefi_init, uefi_write, uefi_clear, uefi_gotoxy,
+    "uefi", uefi_init, uefi_write, uefi_clear, uefi_gotoxy, uefi_getxy,
     uefi_setattr, uefi_cursor, uefi_cols, uefi_rows
 };

@@ -233,12 +233,15 @@ static void fb_gotoxy(UINTN x, UINTN y) {
     fb_draw_cursor(gFb.cursorOn);
 }
 
+/* 我们自己的光标位置。**和 ConOut 的 Mode 没有任何关系** —— 那边不知道我们画到哪。 */
+static void fb_getxy(UINTN *x, UINTN *y) { if (x) *x = gFb.x; if (y) *y = gFb.y; }
+
 static void fb_setattr(UINTN a) { gFb.attr = a & 0xFF; }
 static void fb_cursor(int v)    { gFb.cursorOn = v ? 1 : 0; fb_draw_cursor(gFb.cursorOn); }
 static UINTN fb_cols(void)      { return gFb.cols ? gFb.cols : 80; }
 static UINTN fb_rows(void)      { return gFb.rows ? gFb.rows : 25; }
 
 const TND_CONSOLE gConFb = {
-    "fb", fb_init, fb_write, fb_clear, fb_gotoxy,
+    "fb", fb_init, fb_write, fb_clear, fb_gotoxy, fb_getxy,
     fb_setattr, fb_cursor, fb_cols, fb_rows
 };
