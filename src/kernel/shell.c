@@ -328,7 +328,9 @@ void shell_exec_line(char *line) {
             /* 先打招呼 —— 切到 fb 之后 ConOut 那边就没输出了 */
             con_puts("  switching console to "); con_puts(arg); con_puts(" ...\r\n");
             if (con_select(arg)) {
-                con_puts("  now using: "); con_puts(con_current()); con_puts("\r\n");
+                /* **成功时保持安静。** 切到 fb 会清屏 —— 在这里多打一行，
+                 * 它就会占掉新屏幕的第一行，把 autoexec 的欢迎语挤下去。
+                 * 失败才是必须响的（下面那支），成功只记串口。 */
                 log_puts("[log] shell CONSOLE -> "); log_puts(con_current()); log_puts("\r\n");
             } else {
                 con_puts("  FAILED. staying on "); con_puts(con_current()); con_puts("\r\n");

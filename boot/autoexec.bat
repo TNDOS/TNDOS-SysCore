@@ -3,6 +3,14 @@ REM ==========================================================================
 REM TNDDOS boot script -- autoexec.bat
 REM Executed by the Shell as the last step of the boot chain.
 REM ==========================================================================
+
+REM Switch to our own console FIRST, so everything below is drawn by TNDDOS
+REM itself instead of by the firmware. CONSOLE stays quiet on success, which
+REM is what lets the welcome line land on the first row of the cleared screen.
+CONSOLE fb
+
+echo  Welcome to TNDDOS (2ndDOS)  --  a DOS for the UEFI era.
+echo  ============================================================
 echo.
 echo   TNDDOS autoexec.bat starting
 echo   ------------------------------------------
@@ -74,15 +82,11 @@ echo.
 echo   EDIT is interactive, so a batch file must not start it.
 echo   Run it by hand:   EDIT TNDOS.TXT      F2 saves, ESC quits
 echo.
-echo   --- console backends ---
+echo   --- console backends (CONSOLE <name> switches) ---
 CONSOLE
-echo.
-echo   --- switching to the framebuffer console ---
-CONSOLE fb
-echo   If you can read this, TNDDOS is drawing the pixels itself.
-echo   Type CONSOLE uefi to switch back.
-DIR
 echo.
 echo   --- console scale: SF 1.5 = 150%, SF auto = fit 80x25 ---
 SF
+echo.
+DIR
 echo.
