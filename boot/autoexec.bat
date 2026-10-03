@@ -90,3 +90,10 @@ SF
 echo.
 DIR
 echo.
+REM The welcome is printed at the very top too, but the boot log is longer than
+REM the screen, so it scrolls away. Say it again on the resting screen.
+echo   ============================================================
+echo    Welcome to TNDDOS (2ndDOS) -- ready.
+echo    Type HELP for commands, CONSOLE / SF to tune the display.
+echo   ============================================================
+echo.
