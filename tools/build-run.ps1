@@ -179,7 +179,7 @@ function Build-Pe([string[]]$Src, [string]$Out) {
     Write-Host ("         -> " + (Get-Item $Out).Length + " bytes")
 }
 
-$LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\uni.c','src\lib\status.c','src\lib\file.c','src\lib\guid.c',
+$LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\uni.c','src\lib\font.c','src\lib\status.c','src\lib\file.c','src\lib\guid.c',
               'src\lib\con_uefi.c','src\lib\con_fb.c','src\lib\fontvga.c') |
           ForEach-Object { Join-Path $Root $_ }
 
@@ -297,6 +297,18 @@ if ($CMDS -and (Test-Path (Join-Path $CMDS 'bin'))) {
 foreach ($f in 'efidos.sys','config.sys','autoexec.bat','HELLO.TXT','TNDOS.TXT') {
     $s = Join-Path $Root (Join-Path 'boot' $f)
     if (Test-Path $s) { Copy-Item $s (Join-Path $TndDir $f) -Force; Write-Host ("  [ cp ] " + $f) }
+}
+
+# 点阵字体。是**项目资产**不是构建产物（生成一次 30 秒，不值得每次构建都跑），
+# 所以从 assets 直接拷。重新生成用 tools\mkfont.ps1。
+$FontSrc = Join-Path $Root 'assets\CJK16.FNT'
+if (Test-Path $FontSrc) {
+    $FontDir = Join-Path $TndDir 'FONTS'
+    New-Item -ItemType Directory -Force -Path $FontDir | Out-Null
+    Copy-Item $FontSrc (Join-Path $FontDir 'CJK16.FNT') -Force
+    Write-Host ("  [ cp ] FONTS\CJK16.FNT  (" + [Math]::Round((Get-Item $FontSrc).Length / 1KB) + " KB)")
+} else {
+    Write-Host "  [ cp ] FONTS\CJK16.FNT  -- 缺，跑 tools\mkfont.ps1 生成（控制台会退回内嵌 8x12）"
 }
 Write-Host ("  ESP  -> " + $Esp)
 

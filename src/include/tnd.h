@@ -126,6 +126,17 @@ UINTN con_get_attr(void);
 /* ---- Unicode 基础（lib/uni.c）
  * 字宽和字体无关：字体决定"画成什么样"，字宽决定"占几格"。
  * 中文排版错位是布局问题，不是字形问题 —— 所以这两件事要分开修。 */
+/* ---- 点阵字体（lib/font.c）----
+ * 字体是**我们的数据**，不是固件服务 —— UEFI 的字体协议是 Boot Services，
+ * ExitBootServices 之后就没了。所以从磁盘读进来，之后不依赖固件。
+ * 没加载成功时调用方退回内嵌的 8x12 字体，控制台照样能用。 */
+int          font_load(const char *dosPath);
+int          font_ready(void);
+UINTN        font_cell_h(void);
+UINTN        font_narrow_w(void);
+UINTN        font_wide_w(void);
+const UINT8 *font_lookup(UINT32 cp, UINTN *outW);
+
 int t_utf8_decode(const char *s, UINT32 *outCp);   /* 返回消耗字节数 */
 int t_char_width(UINT32 cp);                        /* 0=组合 1=半角 2=全角 */
 int   con_set_scale(int percent);

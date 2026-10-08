@@ -17,13 +17,13 @@
 #define FB_CELL_W 8
 #define FB_CELL_H 12
 
-/* 影子缓冲里每个格子只有一个字节，装不下码点，所以约定三个**哨兵**：
- *   0x01 全角字符的左半   0x02 全角字符的右半   0x03 有字宽但还没字形
- * 代价是 CP437 的 0x01-0x03（三个笑脸）不显示了 —— 控制字符本来也不该打印。
- * 等 CJK 点阵字体接上来，0x03 会被真字形替掉，哨兵机制本身不用改。 */
-#define FB_WIDE_L  0x01
-#define FB_WIDE_R  0x02
-#define FB_UNKNOWN 0x03
+/* 影子缓冲的一格。
+ * **必须能装下完整码点** —— CJK 码点要 16 位以上，一个字节装不下，
+ * 那样重画一格时就找不回它是哪个字了（滚动、擦光标都要重画）。 */
+typedef struct {
+    UINT32 Ch;      /* 码点；0 = 全角字符的**右半格**（不画，左格会画满两格宽） */
+    UINT32 Attr;
+} FB_CELL;
 
 extern const UINT8  gFontVga[];
 extern const UINTN  gFontGlyphWidth;
@@ -48,7 +48,7 @@ static struct {
     UINTN    x, y;          /* 光标所在格 */
     UINTN    attr;
     int      cursorOn;
-    UINT8   *shadow;        /* 每格 2 字节：字符 + 属性 */
+    FB_CELL *shadow;        /* 每格一个码点 + 属性 */
     EFI_GRAPHICS_PIXEL_FORMAT fmt;
     EFI_PIXEL_BITMASK masks;
 } gFb;
@@ -76,54 +76,68 @@ static UINT32 fb_pixel(UINT32 rgb) {
     }
 }
 
-static void fb_draw_cell(UINTN cx, UINTN cy) {
-    UINTN off, px, py, r, c;
-    UINT8 ch, attr;
-    UINT32 fg, bg;
-    const UINT8 *gl;
+/* 把 1bpp 位图铺到格子上。横向**不缩放**（gw 个目标像素对 gw 个源像素）；
+ * 纵向在字形高和格子高不一致时用定点最近邻。 */
+static void fb_blit_glyph(UINTN cx, UINTN cy, const UINT8 *gl, UINTN gw, UINTN gh,
+                          UINT32 fg, UINT32 bg) {
+    UINTN rb = (gw + 7) >> 3;          /* 位运算 —— [int] 除法是四舍五入，会算错行宽 */
+    UINTN px = cx * gFb.cellW, py = cy * gFb.cellH;
+    UINTN r, c, n = gw;
 
-    if (!gFb.ok || cx >= gFb.cols || cy >= gFb.rows) return;
-    off  = cy * gFb.cols + cx;
-    ch   = gFb.shadow[off * 2];
-    attr = gFb.shadow[off * 2 + 1];
-    fg   = fb_pixel(gPal[attr & 0xF]);
-    bg   = fb_pixel(gPal[(attr >> 4) & 0xF]);
-
-    /* 字体只有 256 个字形（CP437）。超出范围画空格，不要越界读。 */
-    px = cx * gFb.cellW;
-    py = cy * gFb.cellH;
-
-    /* 哨兵格：画一个占位框，而不是空白。
-     * 空白看起来像"丢了字符"，框看起来像"这里有个字，只是还没有字形" ——
-     * 调试时这两个的差别很大。全角的左右两半各画自己那一侧，合起来是一个框。 */
-    if (ch >= FB_WIDE_L && ch <= FB_UNKNOWN) {
-        for (r = 0; r < gFb.cellH; r++) {
-            UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
-            int top = (r == 0), bot = (r == gFb.cellH - 1);
-            for (c = 0; c < gFb.cellW; c++) {
-                int left  = (c == 0)               && (ch != FB_WIDE_R);
-                int right = (c == gFb.cellW - 1)   && (ch != FB_WIDE_L);
-                line[c] = (top || bot || left || right) ? fg : bg;
-            }
-        }
-        return;
-    }
-
-    gl = gFontGlyphHeight ? (gFontVga + (UINTN)ch * gFontGlyphHeight) : 0;
-
-    /* 缩放用定点最近邻：目标第 dy 行取源的第 dy*H/cellH 行。
-     * 这样任意比例（1.5 也行）都能整除到位，不会因为四舍五入把笔画弄断。
-     * 保证 gl 那一行取不到时按空行处理 —— 不然放大倍数一大就越界读。 */
+    if (px + n > gFb.width) n = gFb.width - px;      /* 右边缘裁掉，别越界写 */
     for (r = 0; r < gFb.cellH; r++) {
-        UINTN sy = (r * gFontGlyphHeight) / gFb.cellH;
-        UINT8 bits = (gl && sy < gFontGlyphHeight) ? gl[sy] : 0;
+        UINTN sy = (gh == gFb.cellH) ? r : (r * gh) / gFb.cellH;
+        const UINT8 *srow = gl + sy * rb;
         UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
-        for (c = 0; c < gFb.cellW; c++) {
-            UINTN sx = (c * 8) / gFb.cellW;
-            line[c] = (bits & (0x80 >> sx)) ? fg : bg;
+        for (c = 0; c < n; c++) {
+            UINT8 bit = (UINT8)((srow[c >> 3] >> (7 - (c & 7))) & 1);
+            line[c] = bit ? fg : bg;
         }
     }
 }
+
+/* 有字宽但没字形时画一个占位框。
+ * **不要画成空白** —— 空白看起来像丢了字符，框看起来像"这里有个字，只是还没字形"，
+ * 调试时这两者的差别很大。宽度按字宽来，全角就是两格宽。 */
+static void fb_placeholder(UINTN cx, UINTN cy, UINTN tw, UINT32 fg, UINT32 bg) {
+    UINTN px = cx * gFb.cellW, py = cy * gFb.cellH, r, c;
+    UINTN w = gFb.cellW * (tw ? tw : 1);
+    for (r = 0; r < gFb.cellH; r++) {
+        UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
+        int top = (r == 0), bot = (r == gFb.cellH - 1);
+        for (c = 0; c < w && px + c < gFb.width; c++)
+            line[c] = (top || bot || c == 0 || c == w - 1) ? fg : bg;
+    }
+}
+
+static void fb_draw_cell(UINTN cx, UINTN cy) {
+    UINTN off;
+    UINT32 cp, attr, fg, bg, tw;
+    const UINT8 *gl = 0;
+    UINTN gw = 0, gh = 0;
+
+    if (!gFb.ok || cx >= gFb.cols || cy >= gFb.rows) return;
+    off  = cy * gFb.cols + cx;
+    cp   = gFb.shadow[off].Ch;
+    attr = gFb.shadow[off].Attr;
+    fg   = fb_pixel(gPal[attr & 0xF]);
+    bg   = fb_pixel(gPal[(attr >> 4) & 0xF]);
+
+    if (cp == 0) return;                     /* 全角右半格：左格已经画满两格了 */
+    tw = (UINT32)t_char_width(cp);
+
+    if (font_ready()) {
+        UINTN w = 0;
+        gl = font_lookup(cp, &w);
+        if (gl) { gw = w; gh = font_cell_h(); }
+    }
+    if (!gl && cp < 256 && gFontGlyphHeight) {   /* 退回内嵌 8x12 */
+        gl = gFontVga + cp * gFontGlyphHeight; gw = 8; gh = gFontGlyphHeight;
+    }
+    if (!gl) { fb_placeholder(cx, cy, tw, fg, bg); return; }
+    fb_blit_glyph(cx, cy, gl, gw, gh, fg, bg);
+}
+
 
 /* 光标画成一格底下两条线（下划线）。不闪 —— 需要定时器。 */
 static void fb_draw_cursor(int on) {
@@ -131,7 +145,7 @@ static void fb_draw_cursor(int on) {
     UINT8 attr;
     UINT32 col;
     if (!gFb.ok || gFb.x >= gFb.cols || gFb.y >= gFb.rows) return;
-    attr = gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1];
+    attr = gFb.shadow[gFb.y * gFb.cols + gFb.x].Attr;
     col  = on ? fb_pixel(gPal[attr & 0xF]) : 0;
     if (!on) { fb_draw_cell(gFb.x, gFb.y); return; }
     px = gFb.x * gFb.cellW;
@@ -143,10 +157,16 @@ static void fb_draw_cursor(int on) {
 }
 
 static void fb_scroll(void) {
-    UINTN rowbytes = gFb.cols * 2;
     if (gFb.rows < 2) return;
-    t_memcpy(gFb.shadow, gFb.shadow + rowbytes, rowbytes * (gFb.rows - 1));
-    t_memzero(gFb.shadow + rowbytes * (gFb.rows - 1), rowbytes);
+    t_memcpy(gFb.shadow, gFb.shadow + gFb.cols, gFb.cols * (gFb.rows - 1) * sizeof(FB_CELL));
+    /* **不能用 t_memzero** —— Ch=0 的含义是"全角右半格，不用画"，
+     * 清零会让最后一行永远不重画，旧像素留着，屏幕逐渐糊成一团。
+     * 空行必须是真正的空格。 */
+    for (UINTN i = 0; i < gFb.cols; i++) {
+        UINTN o = gFb.cols * (gFb.rows - 1) + i;
+        gFb.shadow[o].Ch   = ' ';
+        gFb.shadow[o].Attr = (UINT32)gFb.attr;
+    }
     for (UINTN cy = 0; cy < gFb.rows; cy++)
         for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, cy);
 }
@@ -192,7 +212,8 @@ static int fb_apply_scale(int pct) {
     if (pct > 800) pct = 800;
 
     w = (FB_CELL_W * (UINTN)pct) / 100;
-    h = (FB_CELL_H * (UINTN)pct) / 100;
+    /* 格子高跟着字体走 —— 字体没加载时退回内嵌 8x12 的高度 */
+    h = ((font_ready() ? font_cell_h() : FB_CELL_H) * (UINTN)pct) / 100;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     cols = gFb.width / w;
@@ -200,7 +221,7 @@ static int fb_apply_scale(int pct) {
     if (cols < 1 || rows < 1) { log_puts("[log] con_fb: scale too large\r\n"); return 0; }
 
     if (gFb.shadow) { gEnv.BS->FreePool(gFb.shadow); gFb.shadow = 0; }
-    if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, cols * rows * 2, (void **)&gFb.shadow)) || !gFb.shadow) {
+    if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, cols * rows * sizeof(FB_CELL), (void **)&gFb.shadow)) || !gFb.shadow) {
         log_puts("[log] con_fb: out of memory for shadow\r\n");
         return 0;
     }
@@ -208,7 +229,7 @@ static int fb_apply_scale(int pct) {
     gFb.cols = cols; gFb.rows = rows;
     gFb.scalePct = pct;
     gFb.x = gFb.y = 0;
-    t_memzero(gFb.shadow, cols * rows * 2);
+    t_memzero(gFb.shadow, cols * rows * sizeof(FB_CELL));
     fb_clear();
     return 1;
 }
@@ -248,6 +269,11 @@ static int fb_init(void) {
     gFb.cursorOn = 1;
     gFb.scalePct = 0;
     gFb.ok = 1;
+
+    /* **先加载字体** —— 格子高由它决定，apply_scale 要用。
+     * 失败不致命：退回内嵌的 8x12，控制台照样能用（只是没中文）。 */
+    if (!font_load("\\EFI\\TNDOS\\FONTS\\CJK16.FNT"))
+        log_puts("[log] con_fb: no font -- falling back to the built-in 8x12\r\n");
 
     /* 网格、影子缓冲、清屏都在这里做 —— 切缩放时走的是同一条路。
      *
@@ -295,17 +321,17 @@ static void fb_put_cp(UINT32 cp) {
     if (w == 2) {
         /* 右边那一格放不下就整体换行 —— 全角字符被拆开比换行难看得多 */
         if (gFb.x + 1 >= gFb.cols) fb_newline();
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = FB_WIDE_L;
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
+        /* 左格存码点，右格置 0 表示"这是别人的右半边" ——
+         * fb_draw_cell 看到 0 就不画，左边的字形会铺满两格宽。 */
+        gFb.shadow[gFb.y * gFb.cols + gFb.x].Ch       = cp;
+        gFb.shadow[gFb.y * gFb.cols + gFb.x].Attr     = gFb.attr;
+        gFb.shadow[gFb.y * gFb.cols + gFb.x + 1].Ch   = 0;
+        gFb.shadow[gFb.y * gFb.cols + gFb.x + 1].Attr = gFb.attr;
         fb_draw_cell(gFb.x, gFb.y);
-        gFb.x++;
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = FB_WIDE_R;
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
-        fb_draw_cell(gFb.x, gFb.y);
-        gFb.x++;
+        gFb.x += 2;
     } else {
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2]     = (cp <= 0xFF) ? (UINT8)cp : FB_UNKNOWN;
-        gFb.shadow[(gFb.y * gFb.cols + gFb.x) * 2 + 1] = (UINT8)gFb.attr;
+        gFb.shadow[gFb.y * gFb.cols + gFb.x].Ch   = cp;
+        gFb.shadow[gFb.y * gFb.cols + gFb.x].Attr = gFb.attr;
         fb_draw_cell(gFb.x, gFb.y);
         gFb.x++;
     }
@@ -340,8 +366,8 @@ static void fb_write(const char *s, UINTN n) {
 static void fb_clear(void) {
     if (!gFb.ok) return;
     for (UINTN i = 0; i < gFb.cols * gFb.rows; i++) {
-        gFb.shadow[i * 2]     = ' ';
-        gFb.shadow[i * 2 + 1] = (UINT8)gFb.attr;
+        gFb.shadow[i].Ch   = ' ';
+        gFb.shadow[i].Attr = gFb.attr;
     }
     for (UINTN cy = 0; cy < gFb.rows; cy++)
         for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, cy);
@@ -388,8 +414,8 @@ static void fb_write_cells(UINTN x, UINTN y, UINTN w, UINTN h, const TND_CELL *c
     for (r = 0; r < h; r++)
         for (c = 0; c < w; c++) {
             UINTN o = (y + r) * gFb.cols + (x + c);
-            gFb.shadow[o * 2]     = (UINT8)(cells[r * stride + c].Ch   & 0xFF);
-            gFb.shadow[o * 2 + 1] = (UINT8)(cells[r * stride + c].Attr & 0xFF);
+            gFb.shadow[o].Ch   = cells[r * stride + c].Ch;
+            gFb.shadow[o].Attr = cells[r * stride + c].Attr;
         }
     fb_redraw_region(x, y, w, h);
     fb_draw_cursor(gFb.cursorOn);
@@ -402,8 +428,8 @@ static void fb_fill(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr) {
     for (r = 0; r < h; r++)
         for (c = 0; c < w; c++) {
             UINTN o = (y + r) * gFb.cols + (x + c);
-            gFb.shadow[o * 2]     = (UINT8)(ch & 0xFF);
-            gFb.shadow[o * 2 + 1] = (UINT8)(attr & 0xFF);
+            gFb.shadow[o].Ch   = ch;
+            gFb.shadow[o].Attr = attr;
         }
     fb_redraw_region(x, y, w, h);
     fb_draw_cursor(gFb.cursorOn);
@@ -427,11 +453,10 @@ static void fb_scroll_region(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN c
                 UINTN dst = (y + r) * gFb.cols + (x + c);
                 if (src >= 0 && src < (long)h) {
                     UINTN s = (y + (UINTN)src) * gFb.cols + (x + c);
-                    gFb.shadow[dst * 2]     = gFb.shadow[s * 2];
-                    gFb.shadow[dst * 2 + 1] = gFb.shadow[s * 2 + 1];
+                    gFb.shadow[dst] = gFb.shadow[s];
                 } else {
-                    gFb.shadow[dst * 2]     = (UINT8)(ch & 0xFF);
-                    gFb.shadow[dst * 2 + 1] = (UINT8)(attr & 0xFF);
+                    gFb.shadow[dst].Ch   = ch;
+                    gFb.shadow[dst].Attr = attr;
                 }
             }
         }
@@ -442,11 +467,10 @@ static void fb_scroll_region(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN c
                 UINTN dst = (y + r) * gFb.cols + (x + c);
                 if (src >= 0 && src < (long)h) {
                     UINTN s = (y + (UINTN)src) * gFb.cols + (x + c);
-                    gFb.shadow[dst * 2]     = gFb.shadow[s * 2];
-                    gFb.shadow[dst * 2 + 1] = gFb.shadow[s * 2 + 1];
+                    gFb.shadow[dst] = gFb.shadow[s];
                 } else {
-                    gFb.shadow[dst * 2]     = (UINT8)(ch & 0xFF);
-                    gFb.shadow[dst * 2 + 1] = (UINT8)(attr & 0xFF);
+                    gFb.shadow[dst].Ch   = ch;
+                    gFb.shadow[dst].Attr = attr;
                 }
             }
         }
