@@ -130,6 +130,13 @@ UINTN con_get_attr(void);
  * 字体是**我们的数据**，不是固件服务 —— UEFI 的字体协议是 Boot Services，
  * ExitBootServices 之后就没了。所以从磁盘读进来，之后不依赖固件。
  * 没加载成功时调用方退回内嵌的 8x12 字体，控制台照样能用。 */
+/* ---- 单调时基（lib/time.c）
+ * **不需要 IDT**：ticks() 是读时基，不是等中断。关掉时返回 0，不给假值。
+ * 开关：SET TNDDOS_TIMER=ON|OFF（efidos.sys / config.sys）。 */
+void   t_time_init(void);
+int    t_time_on(void);
+UINT64 t_time_ms(void);
+
 int          font_load(const char *dosPath);
 int          font_ready(void);
 UINTN        font_cell_h(void);

@@ -1,4 +1,4 @@
-<#
+﻿<#
   mkfont.ps1 —— 生成 TNDDOS 控制台点阵字体（TNDF v1）
 
   用法：

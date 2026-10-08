@@ -17,3 +17,8 @@ DEVICE=VGA.EFI
 SET TNDOS_SYSTEM=1
 SET TNDOS_ROOT=C:\TNDOS
 SET PATH=C:\;C:\TNDOS;C:\BIN
+
+; 定时器子系统。默认开（TSC 单调时基，不占 CPU、不需要 IDT）。
+; 关掉时 ticks() 老实返回 0，光标不闪。
+; config.sys 里写同一条可以覆盖系统默认值。
+SET TNDDOS_TIMER=ON

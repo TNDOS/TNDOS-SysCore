@@ -299,6 +299,16 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "DRIVERS")) { drv_report(); return; }
+    if (!t_stricmp(cmd, "TIME")) {
+        if (!t_time_on()) {
+            con_puts("  no time base. set TNDDOS_TIMER=ON in efidos.sys / config.sys\r\n");
+        } else {
+            UINT64 ms = t_time_ms();
+            con_puts("  uptime: "); con_u64(ms); con_puts(" ms");
+            con_puts("   ("); con_u64(ms / 1000); con_puts(" s)\r\n");
+        }
+        return;
+    }
     if (!t_stricmp(cmd, "SF")) {
         if (!*arg) {
             con_puts("  scale: "); con_u64((UINT64)con_get_scale()); con_puts("%");

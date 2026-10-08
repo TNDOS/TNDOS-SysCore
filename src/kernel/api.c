@@ -339,7 +339,9 @@ static TND_ABI int api_findclose(int fh) {
 /* ------------------------------------------------------------ 内存 / 时间 */
 static TND_ABI void *api_alloc(tnd_size n) { return kmalloc((UINTN)n); }
 static TND_ABI void  api_free(void *p)     { kfree(p); }
-static TND_ABI tnd_u64 api_ticks(void)     { return 0; }   /* 定时器子系统还没有 */
+/* 自启动以来的**毫秒**。定时器关掉（SET TNDDOS_TIMER=OFF）时返回 0 ——
+ * 老实返回 0，不给假值：假的时间比没有时间更坏。 */
+static TND_ABI tnd_u64 api_ticks(void)     { return t_time_ms(); }
 
 /* ------------------------------------------------------------ 屏幕与键盘 */
 /* **这一组必须走控制台服务层，不能直接碰 ConOut。**

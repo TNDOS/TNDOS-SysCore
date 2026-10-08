@@ -10,3 +10,6 @@ DEVICE=KBD.EFI
 FILES=40
 SET TMP=C:\TMP
 SET TNDOS_USER=1
+; 定时器：留空就是跟随 efidos.sys 的系统默认值。
+; 想关掉就取消下一行注释 —— 用户设置覆盖系统设置。
+; SET TNDDOS_TIMER=OFF
