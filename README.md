@@ -4,7 +4,7 @@ TNDOS——一个全新定义的DOS！！！TNDOS — A Brand-New Definition of 
 
 ---
 
-<a>ENGLISH DOC</a>
+[docs/STATUS.md](ENGLISH DOC)
 ---
 
 
