@@ -1,0 +1,112 @@
+# TNDDOS 功能清单（v0.3.2-M4-SP1）
+
+## 引导与启动
+✅ BOOTX64.EFI 一级加载器（按文件大小分配，无 64KB 上限）
+✅ 内核 PE 加载 + 模块化
+✅ config.sys / efidos.sys 解析
+✅ autoexec.bat 批处理（97 行）
+✅ 开机欢迎语（第一行 + 收尾各一次）
+✅ OVMF/QEMU 自动构建-启动-截屏验证
+⬜ ExitBootServices（完全没做），包含efidos.sys/config.sys的exitboot=0/1
+⬜ 交棒给别的引导器（CHAIN）
+⬜ 真机护栏（写盘自检移出默认 autoexec）
+
+## 内存
+✅ PMM 位图 + 自检
+✅ 内核堆 kmalloc/kfree + 自检
+✅ TNX 窗口预留
+⬜ 分页 / 虚拟内存
+⬜ 内存保护
+⬜ realloc
+⚠️ pmm_reserve 失败时静默降级（日志里能看到）
+
+## 文件系统
+✅ 统一 VFS 层
+✅ 建/删/读/写/seek/stat/rename
+✅ findfirst/findnext（DOS 通配符）
+✅ DIR 颜色（目录青 / 可执行绿）
+⬜ 自有 FAT12/16/32 驱动（现在借 UEFI 的）
+⬜ VFAT / 长文件名（短名硬截断、非 ASCII 变 ?）
+⬜ 卷管理
+⬜ 磁盘工具
+⬜ 自有 NTFS/REFS（可能不计划，这是地狱）/ext/btrfs/…… 驱动（现在借 UEFI 的加载能力加载EfiFs）
+
+## 控制台与显示
+✅ 控制台服务层（TND_CONSOLE + 注册表 + 运行时切换）
+✅ UEFI ConOut 后端
+✅ framebuffer 后端（自己写像素）
+✅ 内嵌 8x12 CP437 点阵字体（逐字形验证）
+✅ 缩放（默认 100%，SF 命令，自动选择）
+✅ 光标（静止，不闪）
+✅ 宽字符**布局**（占 2 格 + UTF-8 正确解码）
+⬜ 宽字符**字形**（CJK 点阵字体）
+⬜ 16 色以上
+⬜ 光标闪烁
+⬜ 串口后端（仍直接调 EFI_SERIAL_IO）
+
+## 输入
+✅ 键盘（借 UEFI ConIn）
+✅ 方向键 / Home / End / Del / Ins
+✅ Shell 行编辑 + 命令历史（16 条）
+⬜ 自有键盘驱动（PS/2）
+⬜ 鼠标
+⬜ 修饰键状态（Ctrl/Alt/Shift）
+⬜ 非阻塞输入查询
+
+## 程序模型与 API
+✅ TNX 格式 v1（48 字节头，无重定位）
+✅ TNX 加载器
+✅ API 表 v2.4（35 个入口）
+✅ SDK（tndrt + 链接脚本 + 示例）
+✅ 句柄模型 fd 0/1/2
+✅ 批量原语（write_cells / fill / scroll / screen）
+✅ 重定向（内核侧）
+⬜ 重定向（Shell 侧 `>` `>>` `<` `|`）
+⬜ 多任务 / 进程隔离（现在一次一个程序，ring 0）
+⬜ 动态链接（明确非目标）
+⬜ 多架构标记（一个8位标记，可被tnx指令读取）
+
+## 工具集
+✅ 7 个外部命令：TREE / FIND / FC / ATTRIB / MORE / EXECOM / EDIT
+✅ ToolsKit：tnxpack / tnxdump / mkfat
+✅ API 自检程序（HELLO.TNX）
+⬜ DEBUG
+⬜ 磁盘工具：FORMAT / CHKDSK / SCANDISK / LABEL
+⬜ 手动退出指令 EXITBOOT
+	（exitboot后，当执行LOAD命令时，如果不是TNX驱动而是EFI PE或者EXE PE，直接报错该模式下无法加载）
+⊘ 已砍掉：DEFRAG / JOIN / MODE / KEYB / NLSFUNC
+
+## 驱动与硬件
+✅ 驱动加载框架（DEVICE=）
+✅ VGA.EFI / KBD.EFI（**空壳，只打横幅**）
+⬜ 真正的驱动模型（协议注册 / 服务路由）
+⬜ 自己枚举 PCI（0xCF8/0xCFC）
+⬜ 块设备：AHCI 或 NVMe
+⬜ 自有 NVMe / AHCI
+
+## 架构、中断、时间
+✅ 内核 MS ABI / TNX SysV ABI 分离
+⬜ 自有 IDT + 异常处理（**M4a 第一件**）
+⬜ 定时器（ticks() 恒返回 0）
+⬜ 中断控制器（PIC/APIC）
+⬜ src/arch/ 边界
+⬜ 第二架构（AArch64 最小移植验证）
+⬜ 架构移植（IA32/Arm32/AArch64/Risc-V/LoongArch的内核与驱动移植）
+
+## 工程与发布
+✅ 5 个仓库（SysCore / SDK / ToolsKit / SysAPP / WebSrv）
+✅ Release 工作流（打标签自动建 Release）
+✅ 网站 + versions.json（不依赖 GitHub API）
+✅ CONTRIBUTING / CONTRIBUTORS / ROADMAP
+✅ 版本号习惯（跟发布走）
+✅ TNX 构建源统一到 SDK（删掉重复副本）
+⬜ GitHub Pages 开启
+⬜ docs/ROADMAP.md 更新到当前状态
+
+## 已知的坑（待修）
+⚠️ 真机写盘：autoexec 每次开机在真实 ESP 上 md/copy/del/rd
+⚠️ pmm_reserve 静默降级
+⚠️ EDIT 不清屏，从当前光标往下画（SDK内API不足）
+⚠️ HELLO.TNX 的宽度测试断言写错（两行内容不同不可能对齐）
+⚠️ 批量原语测试的擦除区域滚动后没对上（测试痕迹）
+⚠️ 控制台层之外仍有代码直接碰 ConOut（已修 shell、api，未全面排查）
