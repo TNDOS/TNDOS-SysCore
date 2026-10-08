@@ -16,10 +16,10 @@ TNDOS——一个全新定义的DOS！！！TNDOS — A Brand-New Definition of 
 保留 DOS 的交互模型（简单、直接、命令行优先、`C:\\` 盘符），
 抛弃 DOS 的内存模型与历史包袱（16 位、BIOS、640KB、DOS ABI）。
 
-* 平台：x86-64 + UEFI-only（ia32 / armv7 / armv8 / RISC-V / LoongArch 预留，暂不实现）
-* 无 CSM、无 Legacy BIOS、无 16 位实模式
-* 可执行格式：**PE 过渡期**、**TNX V1**
-* UEFI 仍是当前赖以生存的平台（文件系统、磁盘、键盘全部借它），**不提前切断**
+- 平台：x86-64 + UEFI-only（IA32 / ARMv7 / Aarch64 / RISC-V / LoongArch 预留接口，暂不实现）
+- 无 CSM、无 Legacy BIOS、无 16 位实模式
+- 可执行格式：**PE 过渡期**、**TNX V1**
+- UEFI 仍是当前赖以生存的平台（文件系统、磁盘、键盘全部借它），**不提前切断**
 
 功能与进度的**逐条清单**见 [TNDOS-目标清单.txt](TNDOS-目标清单.txt)，
 版本路线见 [docs/ROADMAP.md](docs/ROADMAP.md)。
