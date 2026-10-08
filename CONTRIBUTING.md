@@ -123,3 +123,27 @@ Windows PowerShell 5.1 没有 BOM 就按 ANSI 读文件，
 
 **不要反过来**（先打 tag、之后再补版本号）。那样 tag 指向的源码是错的，
 而且 tag 一旦推上去就不该再动 —— 动它等于悄悄换掉别人已经下载过的东西。
+
+---
+
+## 10. 控制台层之外不许碰 `gEnv.ST->ConOut` / Never touch ConOut outside the console layer
+
+**规矩：需要屏幕状态（尺寸、光标位置、当前属性）就问 `con_*`；需要清屏、定位、设置属性也走 `con_*`。**
+
+这条不是洁癖，是**同一个 bug 已经犯了三次**：
+
+| # | 谁 | 症状 |
+|---|---|---|
+| 1 | shell 的行编辑读 `ConOut->Mode->CursorColumn` | 切到 fb 后光标位置是过期值，重画落错位置，屏幕上出现 `ddidir` |
+| 2 | `api_getattr` 读 `ConOut->Mode->Attribute` | 返回过期属性 |
+| 3 | `api_cls` / `api_gotoxy` / `api_cols` / `api_rows` 直连 ConOut | **EDIT 拿到 100x31 而不是 160x50，清屏清的是 UEFI 控制台，定位移的是 UEFI 光标** —— 全屏程序整个错位 |
+
+**根因都一样**：ConOut 是**其中一个后端**，不是唯一的后端。fb 后端自己写像素，
+从不通知 ConOut，所以 ConOut 里的状态**从切换那一刻起就是死的**。
+
+**判据**：任何写成 `gEnv.ST->ConOut->...` 的地方，先问一句 ——
+**"这句话在 fb 后端下还对吗？"** 答不上来就说明它该走 `con_*`。
+
+后端不支持的操作用 `con_*` 也会得到诚实的答案（比如 UEFI 后端的缩放返回"不支持"），
+而绕过服务层只会得到**一个看似合理但过期的值** —— 那比报错难查得多。
+

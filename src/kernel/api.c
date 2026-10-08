@@ -342,15 +342,23 @@ static TND_ABI void  api_free(void *p)     { kfree(p); }
 static TND_ABI tnd_u64 api_ticks(void)     { return 0; }   /* 定时器子系统还没有 */
 
 /* ------------------------------------------------------------ 屏幕与键盘 */
-static TND_ABI void api_cls(void) {
-    if (gEnv.ST && gEnv.ST->ConOut) gEnv.ST->ConOut->ClearScreen(gEnv.ST->ConOut);
-}
+/* **这一组必须走控制台服务层，不能直接碰 ConOut。**
+ *
+ * 它们原来直连 ConOut，切到 fb 后端之后就全错了：
+ *   cls    清的是 UEFI 控制台，fb 根本不理会
+ *   gotoxy 移动的是 UEFI 光标，不是我们的
+ *   cols   返回 100x31（固件的网格），而实际是 160x50
+ *   rows   同上
+ * 症状就是 EDIT：屏幕不清、从当前光标位置往下画、而且按 100 列排版。
+ *
+ * 这跟之前 api_getattr 读 ConOut->Mode->Attribute 是同一个坑 ——
+ * **凡是"当前屏幕状态"的问题，答案只能来自当前后端。** */
+static TND_ABI void api_cls(void) { con_clear(); }
 
 static TND_ABI void api_gotoxy(int x, int y) {
     if (x < 0) x = 0;
     if (y < 0) y = 0;
-    if (gEnv.ST && gEnv.ST->ConOut)
-        gEnv.ST->ConOut->SetCursorPosition(gEnv.ST->ConOut, (UINTN)x, (UINTN)y);
+    con_gotoxy((UINTN)x, (UINTN)y);
 }
 
 /* 阻塞读键，**保留扫描码** —— 方向键的 UnicodeChar 是 0，
@@ -365,19 +373,8 @@ static TND_ABI int api_getkey(void) {
     }
 }
 
-static TND_ABI int api_cols(void) {
-    UINTN c = 80, r = 25;
-    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
-        gEnv.ST->ConOut->QueryMode(gEnv.ST->ConOut, gEnv.ST->ConOut->Mode->Mode, &c, &r);
-    return (int)c;
-}
-
-static TND_ABI int api_rows(void) {
-    UINTN c = 80, r = 25;
-    if (gEnv.ST && gEnv.ST->ConOut && gEnv.ST->ConOut->Mode)
-        gEnv.ST->ConOut->QueryMode(gEnv.ST->ConOut, gEnv.ST->ConOut->Mode->Mode, &c, &r);
-    return (int)r;
-}
+static TND_ABI int api_cols(void) { return (int)con_cols(); }
+static TND_ABI int api_rows(void) { return (int)con_rows(); }
 
 static TND_ABI void api_setattr(int attr) { con_set_attr((UINTN)(attr & 0xFF)); }
 
