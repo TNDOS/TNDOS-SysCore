@@ -76,13 +76,20 @@ static UINT32 fb_pixel(UINT32 rgb) {
     }
 }
 
-/* 把 1bpp 位图铺到格子上。横向**不缩放**（gw 个目标像素对 gw 个源像素）；
- * 纵向在字形高和格子高不一致时用定点最近邻。 */
+/* 把 1bpp 位图铺到格子上。
+ *
+ * units 是这个字符占几格（半角 1、全角 2）。**目标宽度是整个格子**，
+ * 不是字形宽度 —— 这两个只有整数倍缩放时才相等。
+ *
+ * **横向也必须缩放。** 曾经这里写的是"横向不缩放"，因为字形宽刚好等于格子宽。
+ * 直到 SF 1.2 把格子变成 9 宽（而字形还是 8）：右边那一列永远不写，
+ * 旧像素留着，整屏变成花斑。纵向当时做了缩放，横向漏了 —— 不一致就是这么来的。 */
 static void fb_blit_glyph(UINTN cx, UINTN cy, const UINT8 *gl, UINTN gw, UINTN gh,
-                          UINT32 fg, UINT32 bg) {
+                          UINTN units, UINT32 fg, UINT32 bg) {
     UINTN rb = (gw + 7) >> 3;          /* 位运算 —— [int] 除法是四舍五入，会算错行宽 */
     UINTN px = cx * gFb.cellW, py = cy * gFb.cellH;
-    UINTN r, c, n = gw;
+    UINTN dw = gFb.cellW * (units ? units : 1);
+    UINTN r, c, n = dw;
 
     if (px + n > gFb.width) n = gFb.width - px;      /* 右边缘裁掉，别越界写 */
     for (r = 0; r < gFb.cellH; r++) {
@@ -90,7 +97,8 @@ static void fb_blit_glyph(UINTN cx, UINTN cy, const UINT8 *gl, UINTN gw, UINTN g
         const UINT8 *srow = gl + sy * rb;
         UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
         for (c = 0; c < n; c++) {
-            UINT8 bit = (UINT8)((srow[c >> 3] >> (7 - (c & 7))) & 1);
+            UINTN sx = (dw == gw) ? c : (c * gw) / dw;
+            UINT8 bit = (UINT8)((srow[sx >> 3] >> (7 - (sx & 7))) & 1);
             line[c] = bit ? fg : bg;
         }
     }
@@ -114,7 +122,7 @@ static void fb_draw_cell(UINTN cx, UINTN cy) {
     UINTN off;
     UINT32 cp, attr, fg, bg, tw;
     const UINT8 *gl = 0;
-    UINTN gw = 0, gh = 0;
+    UINTN gw = 0, gh = 0, units = 1;
 
     if (!gFb.ok || cx >= gFb.cols || cy >= gFb.rows) return;
     off  = cy * gFb.cols + cx;
@@ -129,13 +137,13 @@ static void fb_draw_cell(UINTN cx, UINTN cy) {
     if (font_ready()) {
         UINTN w = 0;
         gl = font_lookup(cp, &w);
-        if (gl) { gw = w; gh = font_cell_h(); }
+        if (gl) { gw = w; gh = font_cell_h(); units = tw; }
     }
-    if (!gl && cp < 256 && gFontGlyphHeight) {   /* 退回内嵌 8x12 */
-        gl = gFontVga + cp * gFontGlyphHeight; gw = 8; gh = gFontGlyphHeight;
+    if (!gl && cp < 256 && gFontGlyphHeight) {   /* 退回内嵌 8x12（只有半角） */
+        gl = gFontVga + cp * gFontGlyphHeight; gw = 8; gh = gFontGlyphHeight; units = 1;
     }
     if (!gl) { fb_placeholder(cx, cy, tw, fg, bg); return; }
-    fb_blit_glyph(cx, cy, gl, gw, gh, fg, bg);
+    fb_blit_glyph(cx, cy, gl, gw, gh, units, fg, bg);
 }
 
 
@@ -150,9 +158,15 @@ static void fb_draw_cursor(int on) {
     if (!on) { fb_draw_cell(gFb.x, gFb.y); return; }
     px = gFb.x * gFb.cellW;
     py = gFb.y * gFb.cellH + gFb.cellH - 2;
-    for (r = 0; r < 2; r++) {
-        UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
-        for (c = 0; c < gFb.cellW; c++) line[c] = col;
+    /* 光标宽度跟着字宽走 —— 全角是两格，画一格会看起来像少了半截 */
+    {
+        UINTN cw = gFb.cellW * (UINTN)t_char_width(gFb.shadow[gFb.y * gFb.cols + gFb.x].Ch);
+        if (cw < 1) cw = 1;
+        if (px + cw > gFb.width) cw = gFb.width - px;
+        for (r = 0; r < 2; r++) {
+            UINT32 *line = gFb.fb + (py + r) * gFb.stride + px;
+            for (c = 0; c < cw; c++) line[c] = col;
+        }
     }
 }
 
@@ -371,6 +385,18 @@ static void fb_clear(void) {
     }
     for (UINTN cy = 0; cy < gFb.rows; cy++)
         for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, cy);
+
+    /* 网格不一定盖满帧缓冲：格子宽高是向下取整的，142x9=1278 就少了 2 像素。
+     * 那一条留在屏幕上就是"清不掉的边"，缩放不是整数倍时尤其明显。 */
+    {
+        UINT32 bg = fb_pixel(gPal[(gFb.attr >> 4) & 0xF]);
+        UINTN gx = gFb.cols * gFb.cellW, gy = gFb.rows * gFb.cellH, r, c;
+        for (r = 0; r < gFb.height; r++) {
+            UINT32 *line = gFb.fb + r * gFb.stride;
+            for (c = (r < gy) ? gx : 0; c < gFb.width; c++) line[c] = bg;
+        }
+    }
+
     gFb.x = gFb.y = 0;
     fb_draw_cursor(gFb.cursorOn);
 }
