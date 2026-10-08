@@ -170,7 +170,7 @@ function Build-Pe([string[]]$Src, [string]$Out) {
     $S = @($Src | Where-Object { Test-Path $_ })
     if ($S.Count -eq 0) { Write-Host ("  [skip] " + (Split-Path $Out -Leaf) + "  (无源文件)"); return }
     Write-Host ("  [ cc ] " + (Split-Path $Out -Leaf) + "   <- " + (($S | ForEach-Object { Split-Path $_ -Leaf }) -join ', '))
-    $a = @('-target','x86_64-pc-windows-msvc','-ffreestanding','-fno-builtin','-fshort-wchar','-nostdlib',
+    $a = @('-target','x86_64-pc-windows-msvc','-O2','-ffreestanding','-fno-builtin','-fshort-wchar','-nostdlib',
            '-fno-stack-protector','-mno-red-zone','-Wall',
            '-Wl,/subsystem:efi_application,/entry:efi_main','-Wl,/machine:x64',
            '-I', $Inc) + $S + @('-o', $Out)
@@ -239,7 +239,7 @@ $TnxUnits = @(
 )
 foreach ($u in $TnxUnits) {
     Write-Host ("  [tnx] " + $u.Name + ".c   -> " + $u.Name + ".o")
-    $ta = @('-target','x86_64-unknown-none','-ffreestanding','-fno-builtin','-fno-stack-protector',
+    $ta = @('-target','x86_64-unknown-none','-O2','-ffreestanding','-fno-builtin','-fno-stack-protector',
             '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',(Join-Path $SDK 'lib'),
             '-c',$u.Src,'-o',(Join-Path $TnxOut ($u.Name + '.o')))
     Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $ta

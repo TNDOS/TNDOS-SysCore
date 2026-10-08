@@ -46,10 +46,25 @@ void t_strncpy(char *d, const char *s, UINTN cap) {
     d[i] = 0;
 }
 
-void t_memzero(void *d, UINTN n) { unsigned char *p = (unsigned char *)d; while (n--) *p++ = 0; }
+/* 按机器字搬，不是逐字节。
+ *
+ * 逐字节在 -O0 下每字节要五到八条指令，而 -fno-builtin 让编译器不会把它
+ * 识别成 memcpy 去做块搬移。帧缓冲滚动一次要搬 4 MB —— 每次滚动上千万条
+ * 指令，QEMU 没开 KVM 时肉眼可见地卡。
+ *
+ * 两边都对到 8 字节才走字循环：错位访问在 x86 上只是慢，在 LoongArch 那类
+ * 架构上会直接抛对齐异常 —— 移植时这是个真坑，所以这里不做假设。 */
+void t_memzero(void *d, UINTN n) {
+    unsigned char *p = (unsigned char *)d;
+    while (n && ((UINTN)p & 7)) { *p++ = 0; n--; }
+    while (n >= 8) { *(UINT64 *)p = 0; p += 8; n -= 8; }
+    while (n--) *p++ = 0;
+}
 
 void t_memcpy(void *d, const void *s, UINTN n) {
     unsigned char *dp = (unsigned char *)d; const unsigned char *sp = (const unsigned char *)s;
+    while (n && ((((UINTN)dp | (UINTN)sp) & 7))) { *dp++ = *sp++; n--; }
+    while (n >= 8) { *(UINT64 *)dp = *(const UINT64 *)sp; dp += 8; sp += 8; n -= 8; }
     while (n--) *dp++ = *sp++;
 }
 
