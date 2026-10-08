@@ -46,6 +46,7 @@ static struct {
     int      scalePct;      /* 0 = 自动 */
     UINTN    cols, rows;    /* 字符网格 */
     UINTN    x, y;          /* 光标所在格 */
+    int      pending;       /* 延迟换行：光标停在最后一列，等下一个字符才换 */
     UINTN    attr;
     int      cursorOn;
     FB_CELL *shadow;        /* 每格一个码点 + 属性 */
@@ -294,6 +295,7 @@ static int fb_init(void) {
     }
 
     gFb.x = gFb.y = 0;
+    gFb.pending = 0;
     gFb.attr = 0x07;
     gFb.cursorOn = 1;
     gFb.scalePct = 0;
@@ -336,6 +338,7 @@ static int fb_init(void) {
 /* 换行。全角字符放不下时也要用它 —— 全角不能跨行拆成两半。 */
 static void fb_newline(void) {
     gFb.x = 0;
+    gFb.pending = 0;
     if (++gFb.y >= gFb.rows) { gFb.y = gFb.rows - 1; fb_scroll(); }
 }
 
@@ -365,7 +368,16 @@ static void fb_put_cp(UINT32 cp) {
         gFb.x++;
     }
 
-    if (gFb.x >= gFb.cols) fb_newline();
+    /* **延迟换行（deferred wrap）。**
+     *
+     * 写满一行不是"要换行"，是"下一格再换行"。光标停在最后一列不动，
+     * 等下一个字符来了才真的换。
+     *
+     * 不这么做的话，任何"把一行补满到屏幕宽"的程序（EDIT 就是这么写的）
+     * 每行末尾都会多滚一次 —— 症状是整屏下移一行、标题栏被顶掉。
+     * 而且这个 bug 只在 cols 小到某个阈值以下才出现，所以 1.5 好好的、
+     * 1.75 就坏了。 */
+    if (gFb.x >= gFb.cols) { gFb.x = gFb.cols - 1; gFb.pending = 1; }
 }
 
 static void fb_write(const char *s, UINTN n) {
@@ -376,8 +388,11 @@ static void fb_write(const char *s, UINTN n) {
         char c = s[i];
         UINT32 cp;
 
-        if (c == '\r') { gFb.x = 0; i++; continue; }
+        if (c == '\r') { gFb.x = 0; gFb.pending = 0; i++; continue; }
         if (c == '\n') { fb_newline(); i++; continue; }
+
+        /* 挂起的换行在**下一个字符**到来时兑现 */
+        if (gFb.pending) fb_newline();
 
         /* ASCII 直接走，只有多字节才解码 —— 绝大多数输出是 ASCII，
          * 让快路径保持快的。 */
@@ -413,12 +428,14 @@ static void fb_clear(void) {
     }
 
     gFb.x = gFb.y = 0;
+    gFb.pending = 0;
     fb_draw_cursor(gFb.cursorOn);
 }
 
 static void fb_gotoxy(UINTN x, UINTN y) {
     if (!gFb.ok) return;
     fb_draw_cursor(0);
+    gFb.pending = 0;                      /* 显式定位会取消挂起的换行 */
     gFb.x = (x < gFb.cols) ? x : gFb.cols - 1;
     gFb.y = (y < gFb.rows) ? y : gFb.rows - 1;
     fb_draw_cursor(gFb.cursorOn);
