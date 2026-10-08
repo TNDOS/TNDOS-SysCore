@@ -181,8 +181,23 @@ static void fb_scroll(void) {
         gFb.shadow[o].Ch   = ' ';
         gFb.shadow[o].Attr = (UINT32)gFb.attr;
     }
-    for (UINTN cy = 0; cy < gFb.rows; cy++)
-        for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, cy);
+
+    /* **帧缓冲整体上移 cellH 个像素行，而不是重画所有格子。**
+     *
+     * 原来这里是全屏重画：160x50 = 8000 格，每格一次 21427 个字形的二分查找
+     * （约 15 次比较）+ 128 次像素写。启动 97 行、约 50 次滚动 —— 上千万次像素写，
+     * 所以自己的控制台滚动明显比固件的慢。
+     *
+     * 但滚动根本不含"重新排版"：内容就是整体上移了 cellH 个像素行。
+     * 一次内存搬移就够了，然后只重画最后一行格子（160 格）。
+     * 内存是从高地址往低地址搬，正向拷贝不会被自己覆盖。 */
+    {
+        UINTN stride = gFb.stride;
+        UINTN shift  = (UINTN)gFb.cellH * stride;
+        UINTN keep   = (UINTN)(gFb.rows - 1) * gFb.cellH * stride;
+        if (keep) t_memcpy(gFb.fb, gFb.fb + shift, keep * sizeof(UINT32));
+    }
+    for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, gFb.rows - 1);
 }
 
 /* ------------------------------------------------------------------ 接口 */
