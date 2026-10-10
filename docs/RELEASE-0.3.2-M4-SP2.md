@@ -101,32 +101,114 @@ IDT + 异常处理（第一次真正写架构相关代码，顺带立 `src/arch/
 <details>
 <summary>English</summary>
 
-TNDDOS 0.3.2-M4-SP2 -- TNX reaches 1.1, ASCII gets a real bitmap font, and drive letters multiply.
+TNDDOS 0.3.2-M4-SP2
 
-**TNX 1.1.** A `Machine` field joins the header (48 to 56 bytes). The loader accepts the native
-machine only, and refuses the rest usefully: "this is a LoongArch program; this kernel is
-AMD64 -- rebuild it for AMD64" says what it is, what we are, and what to do about it. A v1.0
-file is treated as AMD64 rather than as native, because TNX has only ever produced AMD64
-binaries and any other kernel accepting one would be accepting an image it cannot run.
+**TNX has reached 1.1; ASCII now uses a real bitmap font; drive letters have multiplied.**
 
-**ASCII now uses Unifont's bitmap glyphs.** The complaint was concrete: you could not tell `v`
-from `y`, or the `O` in the prompt from a zero. The cause was not a bad font but the wrong kind
-of font -- Cascadia Mono is an outline font, and rasterising it to 8x16 at 12px loses the detail
-that distinguishes those glyphs; modern fonts rely on OpenType stylistic sets for disambiguation,
-and GDI cannot apply them on this path. Unifont is drawn for 8x16, and its `.hex` glyphs are
-16 bytes each -- exactly the width of a TNDF half-width glyph, so they are copied directly rather
-than rasterised. The CJK half is untouched.
+---
 
-**Multiple drive letters.** Newly attached disks are mounted automatically as `D:`, `E:` and so on;
-`VOL` lists them and typing `D:` switches. This layer deliberately does not parse MBR or GPT: it
-goes through EFI_SIMPLE_FILE_SYSTEM, where the firmware has already parsed the partition table, so
-only mountable volumes appear as handles at all. MSR cannot be mounted because it is not a
-filesystem. Parsing partition tables ourselves belongs to the release where we replace the firmware.
+## What this version does
 
-Also fixed: the TNX command printed versions in three parts while the encoding has two, so
-`0x00010001` displayed as 1.0.1 when it is 1.1; `TND_MAX_DRIVES` was 4, which a single disk with
-a few partitions exhausts; and a few source files lost their UTF-8 BOM in the previous release.
+### 1. TNX 1.1 -- an architecture id in the header
 
-Still UEFI-only, single-tasking, ring 0, no memory isolation, and only ever verified on QEMU + OVMF.
+A `Machine` field joins the header (48 to 56 bytes).
+
+```
+0x01 AMD64     0x02 IA32       0x03 ARMv7       0x04 AArch64
+0x05 RISCV32   0x06 RISCV64    0x07 LOONGARCH32 0x08 LOONGARCH64
+0x09 IA64
+0x0A-0x7F reserved (raise an Issue)   0x80-0xFF experimental (never registered)
+```
+
+**The loader accepts the native machine only**, and refuses everything else -- usefully:
+
+```
+REJECTED: this is a LoongArch program; this kernel is AMD64 -- rebuild it for AMD64
+```
+
+It says **what this is**, **what we are**, and **what to do about it**. "Unsupported
+architecture" gives you nowhere to go.
+
+**A v1.0 file is treated as AMD64, not as native** -- TNX has only ever produced AMD64
+binaries, and any other kernel accepting one would be accepting an image it cannot run.
+
+### 2. ASCII now uses a bitmap font
+
+You could not tell `v` from `y`, or `O` from `0` (the prompt read as TND05) -- that is over now.
+
+**The cause was not a bad font but the wrong kind of font**: Cascadia Mono is an outline font,
+and rasterising it to 8x16 at 12px loses the detail that distinguishes those glyphs. Modern
+fonts rely on **OpenType stylistic sets** for disambiguation (slashed zero, tailed l), and
+**GDI cannot apply those features on this path**.
+
+So it is now Unifont -- a bitmap font **drawn for 8x16**. Each of its `.hex` glyphs is 16 bytes,
+**exactly the width of a TNDF half-width glyph**, so the bitmap is copied directly rather than
+rasterised a second time.
+
+**The CJK half is untouched** -- 16x16 is enough for Han characters, and Han characters do not
+depend on fine detail to be told apart.
+
+### 3. Multiple drive letters
+
+Newly attached disks are mounted automatically as `D:`, `E:`, `F:` and so on; `VOL` lists them
+all, and typing `D:` switches to one.
+
+```
+C:\EFI\TNDOS>vol
+  C:  TNDDOS        (UEFI Simple File System / FAT)
+  D:  (no label)    (UEFI Simple File System / FAT)
+  E:  (no label)    (UEFI Simple File System / FAT)
+
+C:\EFI\TNDOS>d:
+D:\>dir
+Volume D:   Directory of \
+```
+
+**This layer does not parse MBR or GPT** -- it goes through EFI_SIMPLE_FILE_SYSTEM, where the
+partition table has already been parsed by the firmware: only mountable volumes appear as
+handles at all, and MSR, unformatted or non-FAT partitions **never appear**. So "MSR cannot be
+mounted" holds by construction. Parsing partition tables ourselves belongs to the release that
+replaces the firmware.
+
+### 4. Fixed along the way
+
+- **The TNX command printed versions in three parts** while the encoding has two --
+  `0x00010001` displayed as `1.0.1` when it is 1.1
+- **`TND_MAX_DRIVES` was only 4** -- a single disk with a few partitions exhausts that
+- **The previous release dropped the UTF-8 BOM** from a few source files -- restored
+
+---
+
+## Measured
+
+```
+$ tnx hello.tnx        version 1.1 / header 56 bytes / machine 0x01 AMD64
+$ badarch.tnx          REJECTED: this is a LoongArch program; ...
+$ vol                  C: / D: / E:, three drive letters
+$ d: then dir          Volume D:   Directory of \
+```
+
+(`BADARCH.TNX` is 9620 bytes, the same as `HELLO.TNX` -- the machine code changed and **the size
+did not**. That is precisely the property CIH relied on to hide.)
+
+---
+
+## Known limitations (stated plainly, not hedged)
+
+- **One program at a time, ring 0, no memory isolation** -- a crashing program takes the system down
+- **No `ExitBootServices`** -- the firmware's interrupt and exception handling is still in place
+- **Chinese can be displayed but not typed**; the cursor does not blink
+- **The Chinese glyphs are coarse** -- the level that 16x16 rasterisation gives; antialiasing comes later
+- **Only ever verified on QEMU + OVMF**
+- **`autoexec.bat` writes to the real ESP on every boot** -- comment those lines out before using real hardware
+
+---
+
+## Next version
+
+IDT and exception handling (the first genuinely architecture-specific code, and a good moment to
+establish `src/arch/`), then our own FAT driver -- which is when MBR and GPT genuinely have to
+be parsed by us.
 
 </details>
+

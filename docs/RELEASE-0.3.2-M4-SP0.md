@@ -60,26 +60,68 @@ $ console uefi    切回固件 ConOut
 <details>
 <summary>English</summary>
 
-TNDDOS 0.3.2-M4-SP0 -- the console is taken over from the firmware. The first step of M4.
+TNDDOS 0.3.2-M4-SP0
 
-**The console now has the notion of a backend.** The kernel is no longer hard-wired to UEFI's
-ConOut; `TND_CONSOLE` is a set of swappable backends -- the original ConOut, and one that writes
-its own pixels into the framebuffer with its own bitmap font. Switch with `CONSOLE fb` /
-`CONSOLE uefi`.
+**The console has been taken over from the firmware. The first step of M4.**
 
-This matters because ConOut is a Boot Service: it and its font disappear the moment
-`ExitBootServices` runs, while the framebuffer's memory is still there. Taking over output first
-is what makes leaving UEFI conceivable at all.
+---
 
-Also included: a shadow buffer holding a character and an attribute per cell, so scrolling,
-clearing and positioning happen on our side; and an embedded 8x12 CP437 font extracted from
-`vgaoem.fon`.
+## What this version does
 
-Fixed along the way: the shell read its cursor position from `ConOut->Mode`, which is the
-firmware's number and simply wrong once we switch to the framebuffer -- `TND_CONSOLE` gained a
-`GetXY` so we only ever ask our own backend. And `fb_init` did not clear the screen, so leftover
-firmware pixels showed through.
+### 1. The console now has the notion of a backend
 
-Still UEFI-only, single-tasking, ring 0, and only ever verified on QEMU + OVMF.
+The kernel is no longer hard-wired to UEFI's ConOut. `TND_CONSOLE` is a set of swappable backends:
+
+```
+uefi   the original ConOut. Not one behaviour changed; it was merely moved behind the interface.
+fb     **writes its own pixels into the framebuffer**, with its own bitmap font.
+```
+
+Switch any time with `CONSOLE fb` / `CONSOLE uefi`.
+
+**Why it matters**: ConOut is a Boot Service, so it and its font disappear the moment
+`ExitBootServices` runs -- while the framebuffer's **memory** is still there. **Taking over
+output first is what makes leaving UEFI conceivable at all.**
+
+### 2. We have our own display layer
+
+- Take the framebuffer base, width, height and pixels-per-scanline from the GOP
+- Keep our own **shadow buffer** (a character and an attribute per cell); scrolling, clearing
+  and positioning all happen on it
+- An embedded 8x12 bitmap font (256 CP437 glyphs, extracted from `vgaoem.fon`)
+
+### 3. Fixed along the way
+
+- **The shell read its cursor position from `ConOut->Mode`** -- once we switch to the framebuffer
+  that is the firmware's number and simply wrong. `TND_CONSOLE` gained a `GetXY`, so from then on
+  we only ever ask our own backend
+- **`fb_init` did not clear the screen** -- leftover firmware pixels showed through and the
+  screen was a mess
+
+---
+
+## Measured
+
+```
+[log] con_fb: grid=160x50 cell=8x16 scale=100%
+$ console fb      switch to our own framebuffer, 160x50
+$ console uefi    switch back to the firmware's ConOut
+```
+
+---
+
+## Known limitations
+
+- One program at a time, ring 0, no memory isolation
+- No `ExitBootServices`
+- ASCII only; Chinese cannot be displayed yet (that is the next version)
+- Only ever verified on QEMU + OVMF
+
+---
+
+## Next version
+
+Chinese on screen: a font generator, the TNDF font format, a kernel-side loader, and batch primitives.
 
 </details>
+
