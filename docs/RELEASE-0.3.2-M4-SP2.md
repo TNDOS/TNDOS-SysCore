@@ -17,6 +17,10 @@
 0x0A-0x7F 保留（需要就提 Issue）   0x80-0xFF 实验（永久不登记）
 ```
 
+**`0x09` IA64 官方不对其维护，仅作预留** —— **EFI 就是从这里起家的**，但那条线是
+EFI 1.10 / EDK I，**不是加个 target 就能编的移植**。占号是为了将来真有人要移植时
+**不用现拍板**。**预留的是位置，不是承诺。**
+
 **加载器只认本机**，不等于本机的一律拒绝 —— 而且拒绝得有用：
 
 ```
@@ -119,6 +123,11 @@ A `Machine` field joins the header (48 to 56 bytes).
 0x09 IA64
 0x0A-0x7F reserved (raise an Issue)   0x80-0xFF experimental (never registered)
 ```
+
+**`0x09` IA64 is not maintained; the number is reserved and nothing more** -- **EFI started
+here**, but that line is EFI 1.10 / EDK I, **not a port you can do by adding a target**. The
+number is reserved so that anyone who does port it later **will not have to wait for us to make
+the call**. **What is reserved is a slot, not a commitment.**
 
 **The loader accepts the native machine only**, and refuses everything else -- usefully:
 
