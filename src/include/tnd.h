@@ -26,7 +26,7 @@
 
 #define TND_NAME    "TNDDOS"
 #define TND_ALIAS   "2NDDOS"
-#define TND_VERSION "0.3.2-M4-SP1"
+#define TND_VERSION "0.3.2-M4-SP2"
 
 /* 系统文件布局：除 BOOTX64.EFI 外全部在 \EFI\TNDOS\ */
 #define TND_DIR        "\\EFI\\TNDOS"

@@ -39,8 +39,17 @@ jobs:
             echo "release '$tag' already exists, nothing to do"
             exit 0
           fi
+          # tag 里带 "-" 的一律算预发布（v0.3.2-M4-SP2、Pre-1 这种）；
+          # 干净的 v0.3.2 才算正式版。
+          # **工作流文件必须在 tag 指向的那个提交里** ——
+          # GitHub 是从那个提交里读工作流的，指向更早提交的 tag 永远触发不了它。
+          case "$tag" in
+            *-*) PRE="--prerelease" ;;
+            *)   PRE="" ;;
+          esac
           gh release create "$tag" \
             --title "$tag" \
             --generate-notes \
-            --verify-tag
+            --verify-tag \
+            $PRE
           echo "created release '$tag'"
