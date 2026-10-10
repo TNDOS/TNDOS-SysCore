@@ -43,6 +43,8 @@
 #>
 param(
   [string]$Out       = (Join-Path $PSScriptRoot '..\assets\CJK16.FNT'),
+  # 可选：用一份 Unifont .hex 覆盖 ASCII/Latin-1 段。见下面那段的说明。
+  [string]$AsciiHex  = '',
   [string]$AsciiFont = 'Cascadia Mono',
   [double]$AsciiPt   = 12,
   [string]$CjkFont   = 'Noto Sans SC',
@@ -132,6 +134,37 @@ foreach ($r in $ranges) {
   }
   Write-Host ("  [font] 0x{0:X4}-0x{1:X4}  +{2}   total {3}" -f $r[0], $r[1], ($cps.Count - $n0), $cps.Count)
 }
+# ------------------------------------------- ASCII 段换成真正的点阵字体
+# 为什么要这一步：Cascadia Mono 是**轮廓字体**，12px 光栅化到 8x16 会丢掉区分度 ——
+# v/y、O/0、l/1/I 全糊在一起（用户实测：提示符 TNDOS 看起来像 TND05）。
+# 而且现代字体靠 OpenType 的**可选字形**做消歧（斜零、带尾的 l），
+# 而 GDI 这条路应用不了那些特性，拿到的就是消歧最差的那一套。
+#
+# Unifont 是**为 8x16 画的**点阵字体：零带斜杠、y 带钩、l/1/I 各有特征。
+# 它的 .hex 每个字形就是 16 个字节 = 32 个十六进制字符 —— 和 TNDF 的
+# 半角字形**位宽完全相同**，直接搬，不需要重新光栅化。
+if ($AsciiHex) {
+  Write-Host ("  [font] ASCII 段改用点阵源: " + (Split-Path $AsciiHex -Leaf))
+  $src = @{}
+  foreach ($line in [System.IO.File]::ReadAllLines($AsciiHex)) {
+    $s = $line.Trim()
+    if ($s.Length -lt 34 -or $s.IndexOf(':') -ne 4) { continue }
+    $src[[Convert]::ToInt32($s.Substring(0,4),16)] = $s.Substring(5)
+  }
+  $n2 = 0
+  for ($i = 0; $i -lt $cps.Count; $i++) {
+    $cp = $cps[$i]
+    if (-not $src.ContainsKey($cp)) { continue }
+    $bits = $src[$cp]
+    if ($bits.Length -ne 32) { continue }     # 只要 8x16 的，别的形态跳过
+    $gb = New-Object 'byte[]' 16
+    for ($k = 0; $k -lt 16; $k++) { $gb[$k] = [Convert]::ToByte($bits.Substring($k*2,2),16) }
+    $bytes[$i] = $gb
+    $n2++
+  }
+  Write-Host ("  [font] {0} 个字形来自点阵源" -f $n2)
+}
+
 $gN.Dispose(); $gW.Dispose(); $bmpN.Dispose(); $bmpW.Dispose(); $fa.Dispose(); $fw.Dispose()
 Write-Host ("  [font] rendered in {0:N1} s" -f ((Get-Date) - $t0).TotalSeconds)
 
