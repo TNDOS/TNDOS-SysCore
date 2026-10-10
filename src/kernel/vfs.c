@@ -15,7 +15,7 @@
  * ==========================================================================*/
 #include "tnd.h"
 
-#define TND_MAX_DRIVES 4
+#define TND_MAX_DRIVES 26          /* A..Z —— 一块盘上多个分区是常态，4 个不够 */
 #define TND_MAX_COMPS  32
 
 typedef struct {
@@ -45,7 +45,126 @@ int vfs_init(void) {
     gCwd[0] = '\\'; gCwd[1] = 0;
     gCurDrive = 'C';
     log_puts("[log] vfs: mounted C: -> ESP root\r\n");
+    vfs_mount_all();                 /* 其余可挂载的卷依次 D: E: F: ... */
     return 1;
+}
+
+/* ---------------------------------------------------------- 卷枚举与挂载
+ * 把**启动卷之外**的、固件认得的 FAT 卷，依次挂成 D: E: F: ...
+ *
+ * **这一层不解析 MBR / GPT。** 走的是 EFI_SIMPLE_FILE_SYSTEM，分区表是固件
+ * 解析好的：能挂载的卷才会以句柄出现，MSR / 未格式化 / 非 FAT 的**根本不会
+ * 出现**。所以"MSR 拒绝挂载"是天然成立的 —— 它压根不是文件系统。
+ *
+ * 自己解析分区表（GPT 备份头、CRC32、混合 MBR、4K 对齐……）是
+ * **换掉固件、换用我们自己的 FAT 驱动**那一次的活，不是这一次。
+ *
+ * 识别启动卷靠 gEnv.EspHandle —— 直接比句柄。**不用设备路径比较**：
+ * DevicePathSize 不在我们的 BootServices 结构里，而句柄本来就有。 */
+
+/* EFI_FILE_SYSTEM_INFO 的 GUID 与结构。efi.h 里没有，就近放这儿。
+ * ReadOnly 是 1 字节、后面 7 字节填充 —— 不显式写出来就会读错卷标。 */
+static const EFI_GUID kFsInfoGuid = {
+    0x09576E93, 0x6D3F, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B }
+};
+
+typedef struct {
+    UINT64 Size;
+    UINT8  ReadOnly;
+    UINT8  Pad0[7];
+    UINT64 VolumeSize;
+    UINT64 FreeSpace;
+    UINT32 BlockSize;
+    CHAR16 VolumeLabel[1];
+} TND_FS_INFO;
+
+/* 读卷标。读不到就留空 —— 宁可空着，也不编一个出来。 */
+static void read_label(EFI_FILE_PROTOCOL *root, char *out, UINTN cap) {
+    UINT8 buf[512];
+    UINTN sz = sizeof(buf);
+    TND_FS_INFO *fi = (TND_FS_INFO *)buf;
+    out[0] = 0;
+    if (!root->GetInfo) return;
+    {
+        /* 把返回码记到串口 —— "读到空卷标" 和 "根本没读到" 是两件事，
+         * 屏幕上看起来一模一样，只有这里分得开。 */
+        EFI_STATUS ls = root->GetInfo(root, (EFI_GUID *)&kFsInfoGuid, &sz, buf);
+        log_kv_u64("vfs.labelInfo", (UINT64)ls);
+        if (EFI_ERROR(ls)) return;
+    }
+    {
+        UINTN j = 0;
+        for (UINTN i = 0; fi->VolumeLabel[i] && j + 1 < cap; i++) {
+            CHAR16 c = fi->VolumeLabel[i];
+            out[j++] = (c < 0x80) ? (char)c : '?';
+        }
+        out[j] = 0;
+    }
+}
+
+/* DOS 的规矩：直接敲 "D:" 就切到 D 盘。
+ * **这不是语法糖** —— 挂上了盘符却切不过去，等于没挂。
+ * 有 X: 的形状但没挂载时也要把它接下，好报一句 invalid drive，
+ * 而不是让它掉进 "Bad command or file name" —— 那样用户会以为是自己打错了。 */
+static TND_DRIVE *drive_of(char letter);   /* 定义在后面，先声明 */
+
+int vfs_try_chdrive(const char *cmd) {
+    char letter;
+    if (!cmd || !cmd[0] || cmd[1] != ':') return 0;
+    if (cmd[2] != 0 && cmd[2] != '\\' && cmd[2] != '/') return 0;
+    letter = (char)t_toupper((unsigned char)cmd[0]);
+    if (letter < 'A' || letter > 'Z') return 0;
+    if (!drive_of(letter)) {
+        con_puts("  "); con_putc(letter); con_puts(":  invalid drive\r\n");
+        return 1;
+    }
+    gCurDrive = letter;
+    gCwd[0] = '\\'; gCwd[1] = 0;   /* DOS 切盘符回到该盘根目录（我们还没做每盘独立 CWD） */
+    return 1;
+}
+
+int vfs_mount_all(void) {
+    typedef EFI_STATUS (*TND_LOCATE_BUF)(int, EFI_GUID *, VOID *, UINTN *, EFI_HANDLE **);
+    TND_LOCATE_BUF locate = (TND_LOCATE_BUF)gEnv.BS->LocateHandleBuffer;
+    EFI_GUID guid = gEfiSimpleFileSystemProtocolGuid;
+    EFI_HANDLE *bufs = 0;
+    UINTN n = 0;
+    int mounted = 0;
+    char letter = 'D';
+
+    if (!locate) return 0;
+    /* 2 = ByProtocol（EFI_LOCATE_SEARCH_TYPE: AllHandles=0, ByRegisterNotify=1, ByProtocol=2） */
+    if (EFI_ERROR(locate(2, &guid, 0, &n, &bufs)) || !bufs) {
+        log_puts("[log] vfs: no SimpleFileSystem handles\r\n");
+        return 0;
+    }
+
+    for (UINTN i = 0; i < n; i++) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = 0;
+        EFI_FILE_PROTOCOL *root = 0;
+        char one[2];
+
+        if (bufs[i] == gEnv.EspHandle) continue;    /* 启动卷已经是 C: 了，别再挂一遍 */
+        if (gDriveCount >= TND_MAX_DRIVES || letter > 'Z') break;
+        if (EFI_ERROR(gEnv.BS->HandleProtocol(bufs[i], &guid, (void **)&fs)) || !fs) continue;
+        if (EFI_ERROR(fs->OpenVolume(fs, &root)) || !root) continue;
+
+        gDrives[gDriveCount].used   = 1;
+        gDrives[gDriveCount].letter = letter;
+        gDrives[gDriveCount].root   = root;
+        read_label(root, gDrives[gDriveCount].label, sizeof(gDrives[gDriveCount].label));
+        if (!gDrives[gDriveCount].label[0]) t_strcpy(gDrives[gDriveCount].label, "(no label)");
+        gDriveCount++;
+        mounted++;
+
+        one[0] = letter; one[1] = 0;
+        log_puts("[log] vfs: mounted "); log_puts(one); log_puts(":  label=");
+        log_puts(gDrives[gDriveCount - 1].label); log_puts("\r\n");
+        letter++;
+    }
+
+    if (gEnv.BS->FreePool) gEnv.BS->FreePool(bufs);
+    return mounted;
 }
 
 static TND_DRIVE *drive_of(char letter) {

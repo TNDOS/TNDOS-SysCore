@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS — 内部公共接口
  * ==========================================================================*/
 #ifndef TND_H
@@ -252,6 +252,8 @@ int  vfs_rename(const char *a, const char *b);
 int  vfs_copy(const char *a, const char *b);
 int  vfs_chdir(const char *dos);
 void vfs_report(void);
+int  vfs_mount_all(void);   /* 枚举 SimpleFileSystem，把其余卷挂成 D: E: ... */
+int  vfs_try_chdrive(const char *cmd);   /* 处理 "D:" 这种裸盘符切换 */
 const char *vfs_efi_error(EFI_STATUS s);
 
 /* ============================ PMM（M3） ================================== */

@@ -265,6 +265,9 @@ void shell_exec_line(char *line) {
 
     if (!t_stricmp(cmd, "REM")) return;
 
+    /* DOS 的规矩：敲 "D:" 就切到 D 盘 */
+    if (vfs_try_chdrive(cmd)) return;
+
     /* classic DOS: ECHO. / ECHO: / ECHO/ all print a blank line */
     if (!t_strnicmp(cmd, "ECHO", 4) && (cmd[4] == '.' || cmd[4] == ':' || cmd[4] == '/') && !cmd[5]) {
         con_puts("\r\n"); return;
