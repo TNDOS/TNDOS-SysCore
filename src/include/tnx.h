@@ -38,8 +38,31 @@ typedef unsigned long long tnx_u64;
  * 不能和 PE（4D 5A）或 ELF（7F 45 4C 46）撞车。 */
 #define TNX_MAGIC   0x000000001A584E54ULL
 
-#define TNX_VERSION 0x00010000u      /* v1.0 */
-#define TNX_HEADER_SIZE 48u
+#define TNX_VERSION_10  0x00010000u      /* v1.0 —— 没有 Machine 字段 */
+#define TNX_VERSION_11  0x00010001u      /* v1.1 —— 头 56 字节，多一个 Machine */
+#define TNX_VERSION     TNX_VERSION_11   /* 打包器写这个；加载器两个都收 */
+
+#define TNX_HEADER_SIZE     48u          /* v1.0 的头长 */
+#define TNX_HEADER_SIZE_V11 56u          /* v1.1 的头长（48 + Machine） */
+
+/* --------------------------------------------------- 架构标识（v1.1 新增）
+ * TNX 标的是 **CPU，不是固件**。约定表见 TNX-SPEC.md 3.3。
+ *
+ * 0x00 是**无效值** —— v1.0 的兼容由 Version 决定，不由值决定。
+ *   一个没有 Machine 字段的 v1.0 文件，语义上就是 **AMD64**（TNX 至今只
+ *   在 AMD64 上产生过二进制）。写成"按本机处理"的话，别的架构会把 x86
+ *   机器码按自己的架构解 —— 直接崩。见规范 3.3。
+ * 0x80-0xFF 是实验段，官方永不占用，加载器**一律拒绝**。 */
+#define TNX_MACHINE_INVALID     0x00u
+#define TNX_MACHINE_AMD64       0x01u
+#define TNX_MACHINE_IA32        0x02u
+#define TNX_MACHINE_ARMV7       0x03u
+#define TNX_MACHINE_AARCH64     0x04u
+#define TNX_MACHINE_RISCV32     0x05u
+#define TNX_MACHINE_RISCV64     0x06u
+#define TNX_MACHINE_LOONGARCH32 0x07u
+#define TNX_MACHINE_LOONGARCH64 0x08u
+#define TNX_MACHINE_IA64        0x09u
 
 /* ------------------------------------------------------------------ Flags */
 #define TNX_FLAG_CONSOLE   0x00000001u   /* 程序需要控制台 */
@@ -68,7 +91,11 @@ typedef struct {
     tnx_u64 EntryRVA;      /* 24  相对 ImageBase */
     tnx_u64 ImageBase;     /* 32  v1 固定，见 tnd.h 的 TNX_IMAGE_BASE */
     tnx_u64 ImageSize;     /* 40  内存映像总大小（含 BSS） */
-} TNX_HEADER;              /* 恰好 48 字节 */
+    /* ---- v1.1 追加。v1.0 的文件在 48 处就结束了 ---- */
+    tnx_u64 Machine;       /* 48  架构标识（u64 而不是 u8：u8 会在 SectionCount
+                            *      后面留 3 个字节空洞，而空洞只能叫 Reserved
+                            *      —— 见规范 3.3 的说明） */
+} TNX_HEADER;              /* v1.0: 48 / v1.1: 56 字节 */
 
 typedef struct {
     tnx_u32 Tag;           /*  0 */

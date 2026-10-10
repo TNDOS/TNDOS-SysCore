@@ -113,9 +113,103 @@ static EFI_STATUS read_whole(const char *path, void **out, UINTN *outSize) {
 /* ---------------------------------------------------------------- 校验 */
 /* 校验是全篇最该较真的地方：这个加载器将来要吃的是"别人的程序"。
  * 每一条失败都有具体理由，绝不静默继续 —— 静默是 bug 的温床。 */
+/* 本机的架构标识 —— 编译期定死。
+ * 加载器**不需要知道整张表**，它只跟自己这一个值比。表是给人看的。 */
+#if defined(__x86_64__) || defined(_M_X64)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_AMD64
+#  define TND_BUILD_MACHINE_STR  "AMD64"
+#elif defined(__i386__) || defined(_M_IX86)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_IA32
+#  define TND_BUILD_MACHINE_STR  "IA32"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_AARCH64
+#  define TND_BUILD_MACHINE_STR  "AArch64"
+#elif defined(__arm__) || defined(_M_ARM)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_ARMV7
+#  define TND_BUILD_MACHINE_STR  "ARMv7"
+#elif defined(__loongarch64)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_LOONGARCH64
+#  define TND_BUILD_MACHINE_STR  "LoongArch 64"
+#elif defined(__loongarch__)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_LOONGARCH32
+#  define TND_BUILD_MACHINE_STR  "LoongArch 32"
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_RISCV64
+#  define TND_BUILD_MACHINE_STR  "RISC-V 64"
+#elif defined(__riscv)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_RISCV32
+#  define TND_BUILD_MACHINE_STR  "RISC-V 32"
+#elif defined(__ia64__)
+#  define TND_BUILD_MACHINE      TNX_MACHINE_IA64
+#  define TND_BUILD_MACHINE_STR  "IA64"
+#else
+#  define TND_BUILD_MACHINE      TNX_MACHINE_INVALID
+#  define TND_BUILD_MACHINE_STR  "(unknown)"
+#endif
+
+const char *tnx_machine_name(tnx_u8 m) {
+    switch (m) {
+    case TNX_MACHINE_AMD64:       return "AMD64";
+    case TNX_MACHINE_IA32:        return "IA32";
+    case TNX_MACHINE_ARMV7:       return "ARMv7";
+    case TNX_MACHINE_AARCH64:     return "AArch64";
+    case TNX_MACHINE_RISCV32:     return "RISC-V 32";
+    case TNX_MACHINE_RISCV64:     return "RISC-V 64";
+    case TNX_MACHINE_LOONGARCH32: return "LoongArch 32";
+    case TNX_MACHINE_LOONGARCH64: return "LoongArch 64";
+    case TNX_MACHINE_IA64:        return "IA64";
+    default:                      return "(unregistered)";
+    }
+}
+
+/* 拒绝的理由要写对 —— 它决定别人下一步能做什么。
+ * "不支持的架构" 让人无从下手；说清"这是什么、本机是什么"就指明了出路。 */
+static const char *mismatch_why(tnx_u8 m) {
+    switch (m) {
+    case TNX_MACHINE_AMD64:
+        return "this is an AMD64 program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_IA32:
+        return "this is an IA32 program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_ARMV7:
+        return "this is an ARMv7 program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_AARCH64:
+        return "this is an AArch64 program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_RISCV32:
+    case TNX_MACHINE_RISCV64:
+        return "this is a RISC-V program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_LOONGARCH32:
+    case TNX_MACHINE_LOONGARCH64:
+        return "this is a LoongArch program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    case TNX_MACHINE_IA64:
+        return "this is an IA64 program; this kernel is " TND_BUILD_MACHINE_STR " -- rebuild it for " TND_BUILD_MACHINE_STR;
+    default:
+        return "this program is for an unregistered architecture (see the TNX spec, 3.3)";
+    }
+}
+
 static EFI_STATUS validate(const TNX_HEADER *h, UINTN fileSize, const char **why) {
     if (h->Magic != TNX_MAGIC)          { *why = "bad magic (not a TNX)"; return EFI_LOAD_ERROR; }
-    if (h->Version != TNX_VERSION)      { *why = "unsupported version"; return EFI_LOAD_ERROR; }
+    if (h->Version != TNX_VERSION_10 && h->Version != TNX_VERSION_11) {
+        *why = "unsupported version"; return EFI_LOAD_ERROR;
+    }
+    /* 架构判据 —— 规范 3.3。
+     * **v1.0 按 AMD64 处理，不是"按本机"**：v1.0 的二进制只在 AMD64 上产生过，
+     * 别的架构接受它等于接受一个必然跑不了的映像。 */
+    {
+        tnx_u8 m;
+        if (h->Version == TNX_VERSION_10) {
+            m = TNX_MACHINE_AMD64;
+        } else {
+            if (h->HeaderSize < TNX_HEADER_SIZE_V11) {
+                *why = "v1.1 file with HeaderSize below 56"; return EFI_LOAD_ERROR;
+            }
+            m = (tnx_u8)h->Machine;
+            if (m == TNX_MACHINE_INVALID) {
+                *why = "v1.1 file without a machine id (0x00 is invalid)"; return EFI_LOAD_ERROR;
+            }
+        }
+        if (m != TND_BUILD_MACHINE) { *why = mismatch_why(m); return EFI_UNSUPPORTED; }
+    }
     if (h->HeaderSize < TNX_HEADER_SIZE){ *why = "HeaderSize below 48"; return EFI_LOAD_ERROR; }
     if (h->HeaderSize > fileSize)       { *why = "HeaderSize beyond file"; return EFI_LOAD_ERROR; }
     if (h->Flags & ~TNX_KNOWN_FLAGS)    { *why = "unknown flag bits set"; return EFI_UNSUPPORTED; }
@@ -324,10 +418,22 @@ int tnx_info(const char *path) {
         kfree(file);
         return 0;
     }
+    /* 版本是**两段式**：major 在高 16 位，minor 在低 16 位。
+     * 0x00010000 = 1.0，0x00010001 = 1.1 —— 别当成 major.minor.patch。 */
     con_puts("        version  "); con_u64(h->Version >> 16); con_puts(".");
-    con_u64((h->Version >> 8) & 0xFF); con_puts(".");
-    con_u64(h->Version & 0xFF); con_puts("\r\n");
+    con_u64(h->Version & 0xFFFF); con_puts("\r\n");
     con_puts("        header   "); con_u64(h->HeaderSize); con_puts(" bytes\r\n");
+    {
+        static const char hexd[] = "0123456789ABCDEF";
+        /* v1.0 的文件没有这一个字段，按 AMD64 显示（见规范 3.3） */
+        tnx_u8 vm = (h->Version == TNX_VERSION_10) ? TNX_MACHINE_AMD64 : (tnx_u8)h->Machine;
+        char hx[3];
+        hx[0] = '0'; hx[1] = hexd[vm & 0xF]; hx[2] = 0;
+        con_puts("        machine  0x"); con_puts(hx);
+        con_puts("  "); con_puts(tnx_machine_name(vm));
+        if (h->Version == TNX_VERSION_10) con_puts("   (v1.0: no Machine field, assumed AMD64)");
+        con_puts("\r\n");
+    }
     con_puts("        flags    "); con_hex(h->Flags); con_puts("\r\n");
     con_puts("        image    "); con_u64(h->ImageSize); con_puts(" bytes, entry RVA ");
     con_u64(h->EntryRVA); con_puts("\r\n");

@@ -130,6 +130,10 @@ UINTN con_get_attr(void);
  * 字体是**我们的数据**，不是固件服务 —— UEFI 的字体协议是 Boot Services，
  * ExitBootServices 之后就没了。所以从磁盘读进来，之后不依赖固件。
  * 没加载成功时调用方退回内嵌的 8x12 字体，控制台照样能用。 */
+/* ---- TNX 架构标识（kernel/tnx.c）
+ * 只给显示用。加载器内部只跟编译期的 TND_BUILD_MACHINE 比，**不查表**。 */
+const char *tnx_machine_name(tnx_u8 m);
+
 /* ---- 单调时基（lib/time.c）
  * **不需要 IDT**：ticks() 是读时基，不是等中断。关掉时返回 0，不给假值。
  * 开关：SET TNDDOS_TIMER=ON|OFF（efidos.sys / config.sys）。 */
