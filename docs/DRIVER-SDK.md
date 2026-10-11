@@ -1045,7 +1045,74 @@ Boot Services，固件就仍然拥有这些设备。可能的出路（未验证�
 3  ExitBootServices —— 但那要自己接管中断和内存，代价大得多
 ```
 
-**这条路（1）值得优先试** —— 它是唯一一个能一次解决两处卡点的。
+### ✅✅ 全解了：**ERSTSZ 必须在 ERSTBA 之前写** —— 第一条命令跑通了
+
+用 QEMU 的 trace 点看（`-trace enable=usb_xhci_queue_event -trace enable=usb_xhci_fetch_trb`），
+一眼看出问题在哪：
+
+```
+usb_xhci_fetch_trb addr 0x2004000, CR_NOOP, c 0x00005c01     <- 命令**取到了**
+（这之后没有任何 queue_event —— 而固件那些 ER_TRANSFER 都有）
+```
+
+命令被取到了、处理了，**但完成事件没被写出来**。顺着查 `xhci_event()`：
+
+```c
+erdp = xhci_addr64(intr->erdp_low, intr->erdp_high);
+if (erdp < intr->er_start || erdp >= (intr->er_start + TRB_SIZE*intr->er_size)) {
+    xhci_die(xhci);   // 越界 -> 控制器被干掉，事件丢掉
+    return;
+}
+```
+
+`er_start` 是 `xhci_er_reset()` 设的，而它**只在写 ERSTBA 的高 dword 时被调用**：
+
+```c
+case 0x08: /* ERSTSZ */     intr->erstsz = val & 0xffff;   break;
+case 0x10: /* ERSTBA low */  intr->erstba_low = ...;       break;
+case 0x14: /* ERSTBA high */
+    intr->erstba_high = val;
+    xhci_er_reset(xhci, v);       // <-- 在这里解析
+
+static void xhci_er_reset(...) {
+    if (intr->erstsz == 0 || erstba == 0) {
+        intr->er_start = 0;  intr->er_size = 0;  return;   // **直接归零**
+    }
+```
+
+**我们的顺序是 `ERSTBA -> ERSTSZ`。写 ERSTBA 那一刻 `erstsz` 还是 0，
+于是 `er_start = 0`，而且不会再解析一次。**之后所有事件都判越界、被丢掉。
+
+**顺序改回 `ERSTSZ -> ERSTBA` 之后：**
+
+```
+[usb]   got=1  evt[3]=0x0000000000008401  evt[2]=0x0000000001000000
+[usb]   type=33  ccode=1  slot=0
+
+trace: usb_xhci_queue_event v 0, idx 0, ER_COMMAND_COMPLETE, CC_SUCCESS, p 0x2004000
+```
+
+**type=33 = ER_COMMAND_COMPLETE，ccode=1 = CC_SUCCESS，p 正是我们的命令环地址。**
+第一条 USB 命令（No-Op）跑通了，整条命令通路端到端可用。
+
+### 这个 USB 排查里，「读回正确」骗了三次
+
+```
+1  op+0x18 写的其实是 CRCR —— 它收 64 位指针、读回正常
+2  8 字节写只写进低 dword —— 高 dword 本来就该是 0，读回看不出来
+3  ERSTSZ/ERSTBA 写进去、读回都对 —— 但 ERST 根本没被解析
+```
+
+**三次都是同一个形状：寄存器读回等于我们写的值，但控制器内部状态不是那样。**
+对付它的办法只有一个：**去看控制器/实现的状态**（trace、源码、
+或者写只有正确目标才会接受的哨兵值），**不要拿读回当证据。**
+
+### 关于固件争用
+
+trace 里还看到 `usb_xhci_doorbell_write off 0x0004, val 0x00000003` ——
+**是 OVMF 的 XhciDxe 在敲 slot 1 的门铃**，说明它当时正在用这个控制器。
+（所以之前那次「卡在固件里」是真的 —— 但那是另一回事，
+和命令不通没有因果关系。）
 **下一次动它之前，先解决「布局敏感」这一类问题** —— 否则就是在
 一个会漂的地基上盖东西。
 
