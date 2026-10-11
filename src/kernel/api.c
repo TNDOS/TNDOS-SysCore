@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS -- 程序运行环境（TNX API v2 的实现）
  *
  * 这个文件把"DOS 的骨架"给到 TNX 程序：句柄表、标准输入输出、argv、目录遍历。
@@ -418,6 +418,13 @@ static TND_ABI void api_screen(TND_SCREEN *out) {
     out->Reserved      = 0;
 }
 
+/* --------------------------------------------------------------- 驱动（v2.5）
+ * 驱动调这一个函数登记自己。真正的逻辑在 drv.c ——
+ * 这里只做 ABI 适配，不重复实现。 */
+static TND_ABI int api_drv_register(const TND_DRIVER_DESC *desc) {
+    return drv_register(desc);
+}
+
 /* ------------------------------------------------------------------ 表 */
 static const TND_API_TABLE gApi = {
     sizeof(TND_API_TABLE), TND_API_VERSION,
@@ -430,7 +437,8 @@ static const TND_API_TABLE gApi = {
     api_cls, api_gotoxy, api_getkey, api_cols, api_rows,
     api_setattr, api_getattr,
     api_cursor,
-    api_writecells, api_fill, api_scroll, api_screen
+    api_writecells, api_fill, api_scroll, api_screen,
+    api_drv_register
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS — 驱动加载器（M4 起点）
  *
  * 语义按方案：   DEVICE=<文件>   ≈   UEFI Shell 的   load fs0:\<文件>
@@ -26,6 +26,62 @@ typedef struct {
 } TND_DRIVER;
 
 static TND_DRIVER gDrv[TND_MAX_DRIVERS];
+
+/* ---------------------------------------------- 已登记的驱动（v2.5 驱动模型）
+ *
+ * **这和上面那个 gDrv 不是一回事**，两个概念别混：
+ *   gDrv      记「加载过哪些驱动文件」—— 路径、状态、加载次数
+ *   gDrvDesc  记「有哪些驱动登记了自己」—— 这是驱动模型的表
+ *
+ * 驱动是常驻的（住在 TNX_DRIVER_BASE 那个窗口），所以这里存的指针
+ * **一直有效** —— 程序加载时只清程序窗口，碰不到驱动窗口。 */
+#define TND_MAX_DRV_DESC 16
+static const TND_DRIVER_DESC *gDrvDesc[TND_MAX_DRV_DESC];
+static int gDrvDescCount = 0;
+
+/* 驱动登记自己。
+ *
+ * **名字重复返回失败，不静默覆盖** —— 覆盖会让「到底哪个在生效」变成一件
+ * 说不清的事，而那是 bug 的温床。宁可拒绝加载，也不猜。 */
+int drv_register(const TND_DRIVER_DESC *d) {
+    if (!d || !d->Name) return -1;
+
+    /* **必须登记自驱动窗口。** 这不是洁癖，理由是硬的：
+     * 程序窗口里跑的 TNX 返回之后，下一个程序加载时会**把整个程序窗口清零**，
+     * 那时候这里存下的指针就悬空了 —— 而症状是「某个驱动偶尔发疯」，极难查。
+     *
+     * 顺带把驱动模型的规矩钉死：**驱动住在驱动窗口，程序住在程序窗口。** */
+    {
+        UINT64 a = (UINT64)(UINTN)d;
+        if (a < TNX_DRIVER_BASE || a >= TNX_DRIVER_BASE + TNX_WINDOW_SIZE) {
+            log_puts("[log] drv: descriptor is not in the driver window\r\n");
+            return -5;
+        }
+    }
+    if (d->StructSize < sizeof(TND_DRIVER_DESC)) {
+        log_puts("[log] drv: descriptor too small (old driver header?)\r\n");
+        return -2;
+    }
+    for (int i = 0; i < gDrvDescCount; i++) {
+        if (!t_stricmp(gDrvDesc[i]->Name, d->Name)) {
+            log_puts("[log] drv: duplicate driver name: "); log_puts(d->Name); log_puts("\r\n");
+            return -3;
+        }
+    }
+    if (gDrvDescCount >= TND_MAX_DRV_DESC) return -4;
+
+    gDrvDesc[gDrvDescCount++] = d;
+    log_puts("[log] drv: registered \""); log_puts(d->Name);
+    log_puts("\"  type="); log_u64(d->Type);
+    log_puts("  total="); log_u64((UINT64)gDrvDescCount); log_puts("\r\n");
+    return 0;
+}
+
+int drv_desc_count(void) { return gDrvDescCount; }
+
+const TND_DRIVER_DESC *drv_desc(int i) {
+    return (i >= 0 && i < gDrvDescCount) ? gDrvDesc[i] : 0;
+}
 static int gCount = 0, gOk = 0, gFail = 0;
 
 const TND_MODULE_DEF gModDrv = { "drv", "driver loader (DEVICE= -> LoadImage + StartImage)", drv_init };

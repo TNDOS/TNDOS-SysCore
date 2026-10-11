@@ -86,6 +86,12 @@ void module_report(void);
 #define TND_MAX_DRIVERS 16
 int  drv_init(void);
 EFI_STATUS drv_load(const char *path);
+
+/* ---- 驱动模型（v2.5）：驱动是 TNX 程序，调 drv_register 登记自己后常驻。
+ * 返回 0 成功；负数是具体原因，**名字重复也失败，不静默覆盖**。 */
+int  drv_register(const TND_DRIVER_DESC *d);
+int  drv_desc_count(void);
+const TND_DRIVER_DESC *drv_desc(int i);
 void drv_report(void);
 int  drv_count(void);
 int  drv_ok_count(void);

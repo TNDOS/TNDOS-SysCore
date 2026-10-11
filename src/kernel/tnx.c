@@ -24,6 +24,9 @@ static UINT64 gLoads = 0, gFails = 0;
 static UINT64 gLastSize = 0;
 static int    gLastCode = 0;
 
+/* 定义在下面（tnx_report 之前），这里先声明 —— C 要先用先声明。 */
+static void tnx_put_rc(int rc);
+
 /* API 表本身不住在这里 —— 见 src/kernel/api.c（程序运行环境：句柄表 + argv）。
  * 本文件只管格式和加载：校验 -> 清零窗口 -> 逐段搬运 -> 调入口。 */
 
@@ -400,7 +403,9 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
         api_teardown();                     /* 关掉程序忘了关的句柄 */
     }
     if (verbose || rc != 0) {
-        con_puts("        returned "); con_u64((UINT64)(INT64)rc);
+        /* **按有符号打。** DOS 的退出码负数表示错误，
+         * 硬转成无符号会打成 18446744073709551611 —— 看不出是 -5。 */
+        con_puts("        returned "); tnx_put_rc(rc);
         con_puts("\r\n");
     }
 
@@ -475,12 +480,19 @@ int tnx_info(const char *path) {
     return 1;
 }
 
+/* 退出码按**有符号**打。DOS 的退出码负数表示错误 ——
+ * 硬转成无符号会打成 18446744073709551611，看不出那是 -5。 */
+static void tnx_put_rc(int rc) {
+    if ((INT64)rc < 0) { con_puts("-"); con_u64((UINT64)(-(INT64)rc)); }
+    else               { con_u64((UINT64)rc); }
+}
+
 void tnx_report(void) {
     con_puts("\r\n  TNX: ");
     con_u64(gLoads); con_puts(" run, "); con_u64(gFails); con_puts(" rejected");
     if (gLoads) {
         con_puts("   last: "); con_u64(gLastSize); con_puts(" bytes, returned ");
-        con_u64((UINT64)(INT64)gLastCode);
+        tnx_put_rc(gLastCode);
     }
     con_puts("\r\n");
     for (int w = 0; w < TNX_WINDOW_COUNT; w++) {

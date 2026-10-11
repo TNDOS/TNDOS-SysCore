@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS -- TNX 程序能用的内核 API（v2）
  *
  * v1 只有 puts/alloc/free/ticks —— 那个规模什么都写不了，连 MORE 都不行
@@ -40,7 +40,7 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020400u
+#define TND_API_VERSION 0x00020500u
 
 /* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
  * 没法照搬，固件给什么形状就是什么形状。
@@ -148,6 +148,54 @@ typedef struct {
     tnd_u32 Reserved;
 } TND_SCREEN;
 
+/* ------------------------------------------------------------------ 驱动（v2.5）
+ *
+ * 驱动和程序是**同一件事**：都是 TNX 程序，都从 tnx_main 进。
+ * 区别只在驱动会调 drv_register 登记自己，然后**留着不走**。
+ *
+ * 为什么不做成另一种文件类型：那要动 TNX 格式。
+ * **能用入口说清的事，不动格式** —— 和包管理器那次是同一个教训。
+ *
+ * 驱动住在 0x2000000 那个窗口（见 tnd.h 的 TNX_DRIVER_BASE），**常驻**：
+ * 程序加载时只清自己的窗口，碰不到它。这就是多窗口的全部意义。
+ */
+
+/* 驱动类型 */
+#define TND_DRV_DISPLAY 1
+#define TND_DRV_INPUT   2
+#define TND_DRV_BLOCK   3
+#define TND_DRV_BUS     4    /* 总线，产出设备交给别的驱动 */
+
+/* 设备描述。**现在是扁平的，没有设备树** —— 总线驱动的产物就是这些东西。 */
+typedef struct {
+    tnd_u32 StructSize;
+    tnd_u32 Type;
+    tnd_u32 Unit;          /* 同类里第几个，从 0 起 */
+    tnd_u32 Flags;
+    tnd_u64 Base;          /* MMIO 基址，或端口号（看 Type） */
+    tnd_u64 Size;
+    tnd_u32 Irq;           /* **现在恒为 0** —— 没有 IDT，位置先留着 */
+    tnd_u32 Vendor;
+    tnd_u32 Device;
+    char    Name[16];      /* 给人看：VGA / PS2 / AHCI */
+} TND_DEVICE;
+
+/* 驱动描述 —— 驱动填好交给 drv_register。
+ *
+ * probe / attach / detach 的形状借自 EDK II 的 DriverBinding，但那套形状是对的，
+ * 不是巧合。差别：我们暂时不做 RemainingDevicePath（没有设备树）。
+ *
+ * **状态不要放全局变量** —— 一个驱动可能绑多个设备（两块显卡、两个串口）。
+ * attach 返回的那个指针是**绑定实例**，每个设备一份，状态挂在它上面。 */
+typedef struct TND_DRIVER_DESC {
+    tnd_u32      StructSize;
+    tnd_u32      Type;
+    const char  *Name;
+    int  (*TND_ABI probe)(const TND_DEVICE *dev);    /* 这个设备你要不要 */
+    void *(*TND_ABI attach)(const TND_DEVICE *dev);  /* 要了就初始化，返回实例 */
+    void (*TND_ABI detach)(void *ctx);               /* 放开。暂时没人调 */
+} TND_DRIVER_DESC;
+
 /* ------------------------------------------------------------------ API 表 */
 typedef struct {
     tnd_u32 StructSize;
@@ -216,6 +264,11 @@ typedef struct {
     void (*TND_ABI fill)      (int x, int y, int w, int h, int ch, int attr);
     void (*TND_ABI scroll)    (int x, int y, int w, int h, int dy, int ch, int attr);
     void (*TND_ABI screen)    (TND_SCREEN *out);   /* 返回 StructSize 填充后的状态 */
+
+    /* --- 驱动（v2.5 追加）
+     * 驱动调它登记自己。返回 0 成功；名字重复也返回失败 ——
+     * **不静默覆盖**，覆盖是 bug 的温床。 */
+    int  (*TND_ABI drv_register)(const TND_DRIVER_DESC *desc);
 
 } TND_API_TABLE;
 
