@@ -520,6 +520,30 @@ x BSS 体积  **对照实验**：把同一个 4KB 静态数组（同样 64 对�
 范围还能再收一层：**连 attach 的第一行 BAR0 都没打出来**（驱动的标题打了），
 所以 #GP 发生在 **attach 被调用之前**，或者就在 drv_scan 遍历到它的那一刻。
 
+### 第四步：把 drv_register 那一行注释掉
+
+```
+C:\EFI\TNDOS>nvme.tnx
+  NVMe -- find the controller ourselves
+  (registration skipped on purpose -- see the comment)
+C:\EFI\TNDOS>            <- **提示符正常回来了**
+```
+
+**不登记就一切正常。** 驱动映像加载、tnx_main 运行、退出 —— 全都没问题。
+
+```
+驱动映像加载    正常
+tnx_main 运行   正常
+drv_register    **挂在这里**
+```
+
+**范围现在只剩两件事**（drv_register 的全部工作）：
+
+```
+1  把描述符存进表        内核侧几个赋值，读 d->Name / StructSize / Type
+2  drv_scan()            **会跨 ABI 回调驱动里的 probe 和 attach**
+```
+
 **根因未知。** 下一步该做的不是继续猜 NVMe，是**先补观测能力**：
 
 > 现在任何异常都会让系统静默僵住。加一个最小的异常处理
