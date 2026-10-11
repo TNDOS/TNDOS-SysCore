@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS -- kernel module framework
  *
  * Previously kernel.efi was one blob and dependency order was pure luck.
@@ -16,7 +16,8 @@ static const TND_MODULE_DEF *gMods[] = {
     &gModHeap,
     &gModDrv,
     &gModTnx,
-    &gModConf
+    &gModConf,
+    &gModPci          /* 最后：设备扫完，驱动才有东西可认领 */
 };
 
 #define TND_MOD_COUNT ((int)(sizeof(gMods) / sizeof(gMods[0])))

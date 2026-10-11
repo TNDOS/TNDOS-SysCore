@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS — 最小 UEFI 定义
  * 按 UEFI 2.10 规范手写。所有结构体字段顺序严格照规范，中间字段一个都不能删，
  * 因为函数指针的"偏移"就是 ABI 本体。删一个字段 = 整个结构体错位。
@@ -285,6 +285,14 @@ typedef struct EFI_RUNTIME_SERVICES {
 #define EfiResetCold     0
 #define EfiResetWarm     1
 #define EfiResetShutdown 2
+
+/* ------------------------------------------------------ 系统配置表条目
+ * 固件在这里挂各种表：ACPI、SMBIOS、内存属性…… PCI 的 ECAM 基址就是从
+ * ACPI 的 MCFG 表里来的，而那条路**全程读内存**，不需要端口。 */
+typedef struct {
+    EFI_GUID VendorGuid;
+    VOID    *VendorTable;
+} EFI_CONFIGURATION_TABLE;
 
 /* --------------------------------------------------------- System Table */
 typedef struct EFI_SYSTEM_TABLE {

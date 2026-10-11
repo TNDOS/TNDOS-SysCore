@@ -78,6 +78,19 @@ extern const TND_MODULE_DEF gModHeap;
 extern const TND_MODULE_DEF gModDrv;
 extern const TND_MODULE_DEF gModTnx;
 extern const TND_MODULE_DEF gModConf;
+extern const TND_MODULE_DEF gModPci;
+
+/* ---- PCI（kernel/pci.c）
+ * 走 ECAM（内存映射的配置空间）—— 内核是 MS ABI，碰不到 0xCF8/0xCFC。
+ * 设备扫出来之后交给驱动模型认领，别的驱动不用自己碰 PCI。 */
+int      pci_init(void);
+void     pci_scan(void);
+int      pci_ready(void);
+UINT64   pci_ecam_base(void);
+UINT32   pci_read32(UINT8 bus, UINT8 dev, UINT8 fn, UINT8 off);
+int      pci_device_count(void);
+const TND_DEVICE *pci_device(int i);
+void     pci_report(void);
 
 void module_init_all(void);
 void module_report(void);

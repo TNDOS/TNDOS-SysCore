@@ -158,15 +158,25 @@ static int offer(const TND_DRIVER_DESC *d, const TND_DEVICE *dev) {
  *
  * **驱动登记之后要再扫一次** —— 否则后登记的驱动永远看不到已有的设备。
  * 这是驱动模型的标准做法（EDK II 的 ConnectController 是同一个意思）。 */
+/* 把**所有已知设备**过一遍：内置的（8042 之类）和 PCI 的。
+ * device_count/device_at 把两个来源抹平，扫描逻辑只写一份。 */
+static int  device_count(void) { return TND_BUILTIN_COUNT + pci_device_count(); }
+static const TND_DEVICE *device_at(int i) {
+    if (i < TND_BUILTIN_COUNT) return &gBuiltin[i];
+    return pci_device(i - TND_BUILTIN_COUNT);
+}
+
 void drv_scan(void) {
     for (int i = 0; i < gDrvDescCount; i++) {
-        for (int j = 0; j < TND_BUILTIN_COUNT; j++) {
+        for (int j = 0; j < device_count(); j++) {
             /* 已经绑过的组合不再试 —— 否则每次扫描都会重复 attach */
             int seen = 0;
+            const TND_DEVICE *dev = device_at(j);
+            if (!dev) continue;
             for (int k = 0; k < gBindCount; k++)
-                if (gBind[k].desc == gDrvDesc[i] && gBind[k].dev == &gBuiltin[j]) { seen = 1; break; }
+                if (gBind[k].desc == gDrvDesc[i] && gBind[k].dev == dev) { seen = 1; break; }
             if (seen) continue;
-            offer(gDrvDesc[i], &gBuiltin[j]);
+            offer(gDrvDesc[i], dev);
         }
     }
 }

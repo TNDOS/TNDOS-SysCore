@@ -119,6 +119,7 @@ static void cmd_help(void) {
     con_puts("    REN <old> <new>   rename (UEFI has no rename: copy then delete)\r\n");
     con_puts("    COPY <src> <dst>  copy a file\r\n");
     con_puts("    VOL               show mounted drives\r\n");
+    con_puts("    PCI               list PCI devices found via ACPI ECAM\r\n");
     con_puts("    KEYS              dump raw key events (input backend debug)\r\n");
     con_puts("    MEM               memory overview (UEFI map + PMM + heap)\r\n");
     con_puts("    MEMTEST           run memory self-tests\r\n");
@@ -360,6 +361,7 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "VOL"))     { con_puts("\r\n"); vfs_report(); return; }
+    if (!t_stricmp(cmd, "PCI"))     { pci_report(); return; }
     /* 输入诊断：把每个键的扫描码和字符原样打出来。
      * 接驱动的时候「到底收到了什么」比「界面对不对」有用得多。 */
     if (!t_stricmp(cmd, "KEYS")) {

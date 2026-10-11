@@ -195,6 +195,7 @@ Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
             (Join-Path $Root 'src\kernel\api.c'),
             (Join-Path $Root 'src\kernel\conf.c'),
             (Join-Path $Root 'src\kernel\shell.c'),
+                          (Join-Path $Root 'src\kernel\pci.c'),
 (Join-Path $Root 'src\lib\time.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
 
 # 驱动：每个都是独立的 UEFI 映像，落到 \EFI\TNDOS\DRIVERS\
