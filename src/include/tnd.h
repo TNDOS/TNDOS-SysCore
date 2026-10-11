@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS — 内部公共接口
  * ==========================================================================*/
 #ifndef TND_H
@@ -72,6 +72,7 @@ typedef struct {
     int (*init)(void);          /* 返回 0 = 失败，非 0 = 成功 */
 } TND_MODULE_DEF;
 
+extern const TND_MODULE_DEF gModTrap;   /* 最前：异常处理得先装好 */
 extern const TND_MODULE_DEF gModVfs;
 extern const TND_MODULE_DEF gModPmm;
 extern const TND_MODULE_DEF gModHeap;

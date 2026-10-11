@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- kernel module framework
  *
  * Previously kernel.efi was one blob and dependency order was pure luck.
@@ -11,6 +11,7 @@
 #include "tnd.h"
 
 static const TND_MODULE_DEF *gMods[] = {
+    &gModTrap,        /* **最前**：先能看见异常，再谈别的 */
     &gModVfs,
     &gModPmm,
     &gModHeap,

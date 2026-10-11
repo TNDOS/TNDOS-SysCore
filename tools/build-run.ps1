@@ -186,6 +186,7 @@ $LibSrc = @('src\lib\log.c','src\lib\util.c','src\lib\utf8.c','src\lib\uni.c','s
 Write-Host '=== TNDDOS build ==='
 Build-Pe (@((Join-Path $Root 'src\boot\bootx64.c')) + $LibSrc) (Join-Path $BootDir 'BOOTX64.EFI')
 Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
+                          (Join-Path $Root 'src\kernel\trap.c'),
             (Join-Path $Root 'src\kernel\module.c'),
             (Join-Path $Root 'src\kernel\vfs.c'),
             (Join-Path $Root 'src\kernel\pmm.c'),
