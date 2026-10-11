@@ -607,6 +607,37 @@ A（纯函数）                 C（有副作用）
 导致 git 显示文件被改动、而 diff 只有第一行的 BOM 差异。
 还原要用 `git checkout --` 直接回到 HEAD，别自己写回。
 
+### 第七步：验跨 ABI 本身
+
+范围收到「跨 ABI 回调里写内存」之后，最自然的假设是
+**clang 在 MS target 上忽略了 `sysv_abi`** —— 那内核就会按 MS ABI 去调
+SysV 函数。用一个六行程序直接问它：
+
+```c
+__attribute__((sysv_abi)) int sysv_fn(int x, int y);
+int ms_fn(int x, int y);
+int call_sysv(int v) { return sysv_fn(v, v + 1); }
+int call_ms(int v)   { return ms_fn(v, v + 1); }
+```
+
+`-target x86_64-pc-windows-msvc` 编出来：
+
+```
+call_sysv:
+   48:  leal 0x1(%rcx), %esi    读自己的参数（MS ABI：ecx）
+   4b:  movl %ecx, %edi         然后摆成 edi
+   4d:  callq ...
+call_ms:
+   a0:  leal 0x1(%rcx), %edx     MS ABI：edx
+```
+
+**clang 尊重 `sysv_abi`** —— 它确实把参数搬进了 `edi`/`esi`。
+`-target x86_64-unknown-none` 那边参数本来就在 `rdi`，不需要搬运。
+**两边一致，所以 ABI 不是原因。**
+
+（这个测试不用跑 QEMU，六行就够 —— 值得记住：**假设可以直接问编译器，
+不用每次都上虚拟机。**）
+
 ### 五次减法的小结
 
 ```
