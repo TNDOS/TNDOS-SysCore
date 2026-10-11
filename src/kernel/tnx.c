@@ -187,6 +187,16 @@ static const char *mismatch_why(tnx_u8 m) {
     }
 }
 
+/* 已登记的映像窗口。**加载器只认这几个基址** —— 别的都是错的，
+ * 不是「不支持」，是这个文件根本没打算被我们加载。 */
+static const UINT64 kWindows[] = { TNX_PROG_BASE, TNX_DRIVER_BASE };
+#define TNX_WINDOW_COUNT ((int)(sizeof(kWindows) / sizeof(kWindows[0])))
+
+static int window_ok(UINT64 base) {
+    for (int i = 0; i < TNX_WINDOW_COUNT; i++) if (base == kWindows[i]) return 1;
+    return 0;
+}
+
 static EFI_STATUS validate(const TNX_HEADER *h, UINTN fileSize, const char **why) {
     if (h->Magic != TNX_MAGIC)          { *why = "bad magic (not a TNX)"; return EFI_LOAD_ERROR; }
     if (h->Version != TNX_VERSION_10 && h->Version != TNX_VERSION_11) {
@@ -215,7 +225,7 @@ static EFI_STATUS validate(const TNX_HEADER *h, UINTN fileSize, const char **why
     if (h->Flags & ~TNX_KNOWN_FLAGS)    { *why = "unknown flag bits set"; return EFI_UNSUPPORTED; }
     if (h->SectionCount == 0)           { *why = "no sections"; return EFI_LOAD_ERROR; }
     if (h->SectionCount > 16)           { *why = "too many sections (max 16)"; return EFI_LOAD_ERROR; }
-    if (h->ImageBase != TNX_IMAGE_BASE) { *why = "ImageBase does not match loader window"; return EFI_UNSUPPORTED; }
+    if (!window_ok(h->ImageBase))       { *why = "ImageBase is not a registered window"; return EFI_UNSUPPORTED; }
     if (h->ImageSize == 0)              { *why = "ImageSize is 0"; return EFI_LOAD_ERROR; }
     if (h->ImageSize > TNX_WINDOW_SIZE) { *why = "image larger than window"; return EFI_OUT_OF_RESOURCES; }
     if (h->EntryRVA >= h->ImageSize)    { *why = "entry point outside image"; return EFI_LOAD_ERROR; }
@@ -284,7 +294,7 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
     TNX_SECTION *sec;
     const char *why = 0;
     EFI_STATUS s;
-    UINT64 entryRva, imageSize;
+    UINT64 entryRva, imageSize, imageBase;
     int rc = -1;
 
     if (outCode) *outCode = -1;
@@ -354,13 +364,19 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
         }
     }
 
-    /* --- 清零整个映像窗口，再逐段搬 --- */
+    /* --- 清零整个映像窗口，再逐段搬 ---
+     *
+     * **清的是这个文件自己的窗口**，不是「那个固定地址」。
+     * 驱动常驻在它自己的窗口里，程序加载时碰不到它 —— 这就是多窗口的全部意义。
+     *
+     * imageBase 必须在 kfree(file) 之前拷出来：h 指向 file 内部，释放后就悬空了。 */
     entryRva  = h->EntryRVA;
     imageSize = h->ImageSize;
-    t_memzero((void *)(UINTN)TNX_IMAGE_BASE, (UINTN)imageSize);
+    imageBase = h->ImageBase;
+    t_memzero((void *)(UINTN)imageBase, (UINTN)imageSize);
 
     for (UINT32 i = 0; i < h->SectionCount; i++) {
-        UINT8 *dst = (UINT8 *)(UINTN)(TNX_IMAGE_BASE + sec[i].RVA);
+        UINT8 *dst = (UINT8 *)(UINTN)(imageBase + sec[i].RVA);
         if (sec[i].FileSize) t_memcpy(dst, (UINT8 *)file + sec[i].FileOffset, (UINTN)sec[i].FileSize);
         if (sec[i].MemSize > sec[i].FileSize)
             t_memzero(dst + sec[i].FileSize, (UINTN)(sec[i].MemSize - sec[i].FileSize));
@@ -369,6 +385,7 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
     kfree(file);
     file = 0;
 
+    log_kv_u64("tnx.load.imageBase", imageBase);
     log_kv_u64("tnx.load.imageSize", imageSize);
     log_kv_u64("tnx.load.entryRva", entryRva);
 
@@ -377,7 +394,7 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
      * DOS 跑一个程序也不会先跟你汇报段表。只有返回值非 0 才吭一声。 */
     if (verbose) con_puts("        running ...\r\n");
     {
-        TNX_ENTRY entry = (TNX_ENTRY)(UINTN)(TNX_IMAGE_BASE + entryRva);
+        TNX_ENTRY entry = (TNX_ENTRY)(UINTN)(imageBase + entryRva);
         api_setup(gRunArgc, gRunArgv);      /* 装好 fd 0/1/2 与 argv */
         rc = entry(api_get_table());
         api_teardown();                     /* 关掉程序忘了关的句柄 */
@@ -437,6 +454,11 @@ int tnx_info(const char *path) {
     con_puts("        flags    "); con_hex(h->Flags); con_puts("\r\n");
     con_puts("        image    "); con_u64(h->ImageSize); con_puts(" bytes, entry RVA ");
     con_u64(h->EntryRVA); con_puts("\r\n");
+    /* 这个文件会用**哪个**窗口 —— 一眼看出它是程序还是驱动 */
+    con_puts("        window   "); con_u64(h->ImageBase);
+    con_puts(h->ImageBase == TNX_PROG_BASE ? "   (program, loads fresh each run)"
+                                           : "   (driver, stays resident)");
+    con_puts("\r\n");
     con_puts("        sections "); con_u64((UINT64)h->SectionCount); con_puts("\r\n");
 
     sec = (TNX_SECTION *)((UINT8 *)file + h->HeaderSize);
@@ -461,8 +483,12 @@ void tnx_report(void) {
         con_u64((UINT64)(INT64)gLastCode);
     }
     con_puts("\r\n");
-    con_puts("       image window "); con_u64(TNX_IMAGE_BASE);
-    con_puts(" .. "); con_u64(TNX_IMAGE_BASE + TNX_WINDOW_SIZE); con_puts("\r\n");
+    for (int w = 0; w < TNX_WINDOW_COUNT; w++) {
+        /* 程序窗口和驱动窗口分开列 —— 看到「哪个窗口被程序占了」是排障的第一步 */
+        con_puts(w == 0 ? "  window prog    " : "  window driver  ");
+        con_u64(kWindows[w]);
+        con_puts(" .. "); con_u64(kWindows[w] + TNX_WINDOW_SIZE); con_puts("\r\n");
+    }
     log_kv_u64("tnx.loads", gLoads);
     log_kv_u64("tnx.fails", gFails);
 }

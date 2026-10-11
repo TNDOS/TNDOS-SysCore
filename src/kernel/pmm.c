@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS -- physical memory manager
  *
  * Take the UEFI memory map, build a bitmap covering all physical pages (1 = used),
@@ -132,7 +132,10 @@ int pmm_init(void) {
      * 放在它后面的话这次预留会**静默地什么都不做** ——
      * 位图上看不出来，只有等到堆长到那个地址才炸。 */
     gReady = 1;
-    pmm_reserve(TNX_IMAGE_BASE, (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
+    /* **两个窗口都要占住。** 只占程序窗口的话，驱动窗口会被堆吃掉，
+     * 症状是「驱动加载失败」而且看起来像内存不够 —— 极难查。 */
+    pmm_reserve(TNX_PROG_BASE,   (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
+    pmm_reserve(TNX_DRIVER_BASE, (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
 
     gFreePages = 0; gUsedPages = 0;
     for (i = 0; i < gTotalPages; i++) { if (BIT_GET(i)) gUsedPages++; else gFreePages++; }
