@@ -92,6 +92,14 @@ EFI_STATUS drv_load(const char *path);
 int  drv_register(const TND_DRIVER_DESC *d);
 int  drv_desc_count(void);
 const TND_DRIVER_DESC *drv_desc(int i);
+
+/* 驱动模型另一半：设备从哪来。内置设备（8042 之类）现在只有一张静态表；
+ * PCI 设备将来由 PCI 总线驱动产出。drv_scan() 把已知设备过一遍让人认领。 */
+void   drv_scan(void);
+int    drv_binding_count(void);
+const TND_DRIVER_DESC *drv_binding_desc(int i);
+const TND_DEVICE      *drv_binding_dev(int i);
+void  *drv_binding_ctx(int i);
 void drv_report(void);
 int  drv_count(void);
 int  drv_ok_count(void);

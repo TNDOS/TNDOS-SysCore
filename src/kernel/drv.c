@@ -35,6 +35,8 @@ static TND_DRIVER gDrv[TND_MAX_DRIVERS];
  *
  * 驱动是常驻的（住在 TNX_DRIVER_BASE 那个窗口），所以这里存的指针
  * **一直有效** —— 程序加载时只清程序窗口，碰不到驱动窗口。 */
+void drv_scan(void);   /* 定义在下面，先声明 */
+
 #define TND_MAX_DRV_DESC 16
 static const TND_DRIVER_DESC *gDrvDesc[TND_MAX_DRV_DESC];
 static int gDrvDescCount = 0;
@@ -74,10 +76,100 @@ int drv_register(const TND_DRIVER_DESC *d) {
     log_puts("[log] drv: registered \""); log_puts(d->Name);
     log_puts("\"  type="); log_u64(d->Type);
     log_puts("  total="); log_u64((UINT64)gDrvDescCount); log_puts("\r\n");
+
+    /* 新驱动马上见一眼已有设备 —— 不等下一次扫描 */
+    drv_scan();
     return 0;
 }
 
 int drv_desc_count(void) { return gDrvDescCount; }
+
+/* ------------------------------------------------- 已知设备（内置）
+ *
+ * 这些是**板上就有、但枚举不出来**的东西：8042 键盘控制器、PIT、串口……
+ * PCI 设备将来由 PCI 总线驱动枚举，不走这张表。
+ *
+ * PS/2 的 Base 是**数据端口号**（0x60），Size 是端口数（2：0x60 和 0x64）。 */
+static const TND_DEVICE gBuiltin[] = {
+    { sizeof(TND_DEVICE), TND_DRV_INPUT, 0, 0, 0x60, 2, 0, 0, 0, "PS2" },
+};
+#define TND_BUILTIN_COUNT ((int)(sizeof(gBuiltin) / sizeof(gBuiltin[0])))
+
+/* ------------------------------------------------------------ 绑定实例
+ *
+ * 一个「驱动 x 设备」的组合。**状态挂在 ctx 上**，不放全局变量 ——
+ * 一个驱动可能绑多个设备，全局变量会让它们互相打架。 */
+typedef struct {
+    const TND_DRIVER_DESC *desc;
+    const TND_DEVICE      *dev;
+    void                  *ctx;     /* 驱动自己填的实例指针 */
+} TND_BINDING;
+
+#define TND_MAX_BINDINGS 16
+static TND_BINDING gBind[TND_MAX_BINDINGS];
+static int gBindCount = 0;
+
+int drv_binding_count(void) { return gBindCount; }
+
+const TND_DRIVER_DESC *drv_binding_desc(int i) {
+    return (i >= 0 && i < gBindCount) ? gBind[i].desc : 0;
+}
+const TND_DEVICE *drv_binding_dev(int i) {
+    return (i >= 0 && i < gBindCount) ? gBind[i].dev : 0;
+}
+void *drv_binding_ctx(int i) {
+    return (i >= 0 && i < gBindCount) ? gBind[i].ctx : 0;
+}
+
+/* 把这个设备交给一个驱动试试。
+ * probe 说不认领 -> 什么都不做（**不算失败**，一个设备本来就可能没驱动认）。 */
+static int offer(const TND_DRIVER_DESC *d, const TND_DEVICE *dev) {
+    void *ctx;
+
+    if (!d->probe || !d->attach) return 0;
+    if (!d->probe(dev)) return 0;
+
+    if (gBindCount >= TND_MAX_BINDINGS) {
+        log_puts("[log] drv: too many bindings\r\n");
+        return -1;
+    }
+
+    ctx = d->attach(dev);
+    if (!ctx) {
+        /* **认领了但初始化失败要吭声** —— 静默地把设备放着不管，
+         * 症状是「设备明明在，就是不能用」，最难查。 */
+        log_puts("[log] drv: attach FAILED for \"");
+        log_puts(d->Name); log_puts("\" on "); log_puts(dev->Name); log_puts("\r\n");
+        return -1;
+    }
+
+    gBind[gBindCount].desc = d;
+    gBind[gBindCount].dev  = dev;
+    gBind[gBindCount].ctx  = ctx;
+    gBindCount++;
+
+    log_puts("[log] drv: bound \""); log_puts(d->Name);
+    log_puts("\" -> "); log_puts(dev->Name);
+    log_puts("  bindings="); log_u64((UINT64)gBindCount); log_puts("\r\n");
+    return 1;
+}
+
+/* 把已知设备过一遍，让每个已登记的驱动认领。
+ *
+ * **驱动登记之后要再扫一次** —— 否则后登记的驱动永远看不到已有的设备。
+ * 这是驱动模型的标准做法（EDK II 的 ConnectController 是同一个意思）。 */
+void drv_scan(void) {
+    for (int i = 0; i < gDrvDescCount; i++) {
+        for (int j = 0; j < TND_BUILTIN_COUNT; j++) {
+            /* 已经绑过的组合不再试 —— 否则每次扫描都会重复 attach */
+            int seen = 0;
+            for (int k = 0; k < gBindCount; k++)
+                if (gBind[k].desc == gDrvDesc[i] && gBind[k].dev == &gBuiltin[j]) { seen = 1; break; }
+            if (seen) continue;
+            offer(gDrvDesc[i], &gBuiltin[j]);
+        }
+    }
+}
 
 const TND_DRIVER_DESC *drv_desc(int i) {
     return (i >= 0 && i < gDrvDescCount) ? gDrvDesc[i] : 0;
@@ -231,6 +323,32 @@ void drv_report(void) {
         con_puts("   ");
         con_u64((UINT64)d->imageSize);
         con_puts(" bytes\r\n");
+    }
+
+    /* ---- 已登记的驱动（v2.5 驱动模型）
+     * 和上面那段不是一回事：上面是「加载过哪些驱动文件」，
+     * 这里是「有哪些驱动登记了自己、认领了什么」。 */
+    con_puts("\r\n  Registered (");
+    con_u64((UINT64)gDrvDescCount); con_puts(" driver"); if (gDrvDescCount != 1) con_puts("s");
+    con_puts(", "); con_u64((UINT64)gBindCount); con_puts(" binding"); if (gBindCount != 1) con_puts("s");
+    con_puts(")\r\n");
+
+    if (!gDrvDescCount) {
+        con_puts("    (none)\r\n");
+    } else {
+        for (int i = 0; i < gDrvDescCount; i++) {
+            int n = 0;
+            for (int k = 0; k < gBindCount; k++) if (gBind[k].desc == gDrvDesc[i]) n++;
+            con_puts("    "); con_puts(gDrvDesc[i]->Name);
+            con_puts("   type="); con_u64(gDrvDesc[i]->Type);
+            con_puts("   bound="); con_u64((UINT64)n);
+            con_puts("\r\n");
+        }
+        for (int i = 0; i < gBindCount; i++) {
+            con_puts("      -> "); con_puts(gBind[i].dev->Name);
+            con_puts("   ctx="); con_hex((UINT64)(UINTN)gBind[i].ctx);
+            con_puts("\r\n");
+        }
     }
     log_kv_u64("drv.count", (UINT64)gCount);
     log_kv_u64("drv.ok", (UINT64)gOk);
