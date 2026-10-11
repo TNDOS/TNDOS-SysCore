@@ -682,9 +682,49 @@ call_ms:
 ```
 
 **到这里就不该再试了。** 排除法把范围收得很窄，但再窄也跨不过
-「我不知道这一条规则」这一步 —— 下一步是去查 xHCI 规范原文，
-尤其是这几个寄存器在 HCH=1 时的**写入顺序依赖**，以及
-`CONFIG.MaxSlotsEn` 的接受条件。**瞎试只会烧掉轮次。**
+「我不知道这一条规则」这一步 —— 下一步是去查规范。**瞎试只会烧掉轮次。**
+
+### 查到了：ERSTSZ / ERSTBA / ERDP 在 Runtime 区，不在 Operational 区
+
+**一次搜索就出答案。**命中两条关键信息：
+
+```
+1  Renesas 数据表的表头：
+   ERSTSZ Register (Offset Address: **Runtime Base (600h)** + 028h + (20h x Interrupter))
+2  SLOF 的一个提交标题：
+   usb-xhci: **Reset ERSTSZ together with ERSTBA**
+```
+
+xHCI 的寄存器分三块，**我一直只用了前两块**：
+
+```
+能力区    base + 0x00 ..          CAPLENGTH / HCSPARAMS / HCCPARAMS
+                                 偏移 0x18 = **RTSOFF（运行时区偏移）**
+运行时区  base + CAPLENGTH ..     USBCMD / USBSTS / CRCR(0x10) / DCBAAP(0x18) / CONFIG(0x20)
+运行时2   base + RTSOFF + 0x20    Interrupter 0:
+                                    +0x08 ERSTSZ
+                                    +0x10 ERSTBA
+                                    +0x18 ERDP
+```
+
+**我用 `base + caplen` 去读写后三个 —— 那里根本没有寄存器。**于是：
+
+```
+DCBAAP  op+0x18   真的寄存器     -> 写进去、读回对
+ERSTBA  op+0x30   **不是寄存器** -> 但那是 MMIO 空间，写进去照样读得回
+                                   **所以「写成功」是假象**
+ERSTSZ  不是寄存器 -> 读回 0
+ERDP    不是寄存器 -> 读回 0
+```
+
+**五个假设为什么全都不成立：地址本身就是错的。**和顺序、对齐、
+写条件都无关 —— 那些假设都在同一个错的前提上做推理。
+
+**这一轮的价值：一次搜索，胜过五轮试错。**
+上一轮判断「该查规范」是对的，这一轮执行了它。
+
+（`CRCR`(0x10) 和 `CONFIG`(0x20) 的偏移在 op 区是对的，它们读回 0
+还有别的原因，留到下一轮。另外记下：**ERSTSZ 和 ERSTBA 要一起复位**。）
 
 ### 这两个卡点的共同点
 
