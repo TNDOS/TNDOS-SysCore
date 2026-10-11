@@ -564,6 +564,49 @@ drv_scan()    **挂在这里**
             （跨 ABI 回调，进驱动窗口）
 ```
 
+### 第六步：反汇编两版 probe，再划掉两个
+
+三组对照把范围收到「纯函数 vs 有副作用」。接下来这一步是**把它翻译成具体东西**：
+
+**划掉一：头文件布局分歧**
+
+```
+内核 src/include/tnd_api.h      SHA256 34DE760E0425E0E5...
+驱动 repos/TNDOS-SDK/include/... SHA256 34DE760E0425E0E5...
+-> **逐字节一致**
+```
+
+内核和驱动对 `TND_DEVICE` 的布局没有分歧，驱动读到的不是垃圾。
+
+**划掉二：「用不用栈」**
+
+反汇编两版的 `probe` 开头：
+
+```
+A（纯函数）                 C（有副作用）
+  pushq %rbp                  pushq %rbp
+  movq  %rsp,%rbp             movq  %rsp,%rbp
+  subq  $0x10,%rsp            subq  $0x10,%rsp
+  movq  %rdi,-0x8(%rbp)       movq  %rdi,-0x8(%rbp)
+  movq  -0x8(%rbp),%rcx       movl  0x2001df0,%eax     <- 只多这 4 行
+  xorl  %eax,%eax             addl  $0x1,%eax
+  cmpl  $0x3,0x4(%rcx)        movl  %eax,0x2001df0
+                              movq  -0x8(%rbp),%rcx
+                              xorl  %eax,%eax
+                              cmpl  $0x3,0x4(%rcx)
+```
+
+**两版都用栈，栈帧一模一样。** 所以「纯函数不用栈、有副作用用栈、而用栈会挂」
+这个假设也被推翻了。
+
+**现在范围是**：两版唯一的差别就是那 4 行 —— 一次对 `imageBase + 0x1DF0` 的
+读-改-写（写 `.bss`）。**为什么一次 .bss 写入能决定整个驱动挂不挂，
+还没解释清楚。**
+
+顺带记一个反复踩的坑：**我用脚本改文件再写回时加了 BOM**，
+导致 git 显示文件被改动、而 diff 只有第一行的 BOM 差异。
+还原要用 `git checkout --` 直接回到 HEAD，别自己写回。
+
 ### 五次减法的小结
 
 ```
