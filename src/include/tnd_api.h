@@ -172,8 +172,12 @@ typedef struct {
     tnd_u32 Type;
     tnd_u32 Unit;          /* 同类里第几个，从 0 起 */
     tnd_u32 Flags;
-    tnd_u64 Base;          /* MMIO 基址，或端口号（看 Type） */
+    tnd_u64 Base;          /* 简要基址：内置设备是端口号；PCI 设备等于 Bar[0] */
     tnd_u64 Size;
+    /* PCI 的六个 BAR。**不能只看 BAR0** —— AHCI 的寄存器基址是 BAR5，
+     * 显卡的线性帧缓冲常常是 BAR0，网卡又各不一样。Base 保留是给
+     * 内置设备（8042 那种只有端口号的）用的。 */
+    tnd_u64 Bar[6];
     tnd_u32 Irq;           /* **现在恒为 0** —— 没有 IDT，位置先留着 */
     tnd_u32 Vendor;
     tnd_u32 Device;

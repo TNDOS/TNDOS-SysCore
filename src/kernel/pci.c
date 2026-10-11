@@ -224,6 +224,20 @@ void pci_scan(void) {
                 d->Device = (UINT32)(id >> 16);
                 d->Base   = bar0 & 0xFFFFFFF0u;  /* 只取地址，先不管 I/O 空间标记 */
                 d->Size   = 0;
+                {
+                    /* 六个 BAR。**64 位 BAR 占两个槽**（低 4 位里的 type 位
+                     * 是 0b10），高半必须一起读进来，否则地址只有低 32 位。 */
+                    for (int b = 0; b < 6; b++) {
+                        UINT32 v = pci_read32(bus, dev, fn, (UINT8)(0x10 + b * 4));
+                        UINT8  t = (UINT8)((v >> 1) & 0x3);
+                        d->Bar[b] = (UINT64)(v & 0xFFFFFFF0u);
+                        if (t == 0x2 && b < 5) {
+                            UINT32 hi = pci_read32(bus, dev, fn, (UINT8)(0x10 + (b + 1) * 4));
+                            d->Bar[b] |= ((UINT64)hi << 32);
+                            b++;            /* 高半已经吃掉，跳过 */
+                        }
+                    }
+                }
                 d->Irq    = 0;                   /* 没有 IDT，中断先留空 */
 
                 /* 名字做成 BDF 加类码 —— 一眼能对上 lspci 的输出 */
