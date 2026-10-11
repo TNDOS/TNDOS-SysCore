@@ -69,16 +69,13 @@ static int wild_match(const char *pat, const char *name) {
     return *name == 0;
 }
 
-/* 阻塞读一个键 */
+/* 阻塞读一个键。
+ * **走 in_getkey()，不直连固件** —— 否则 PS/2 驱动注册了也没人用。 */
 static int con_read_key(void) {
-    EFI_INPUT_KEY k;
-    if (!gEnv.ST || !gEnv.ST->ConIn) return -1;
     for (;;) {
-        if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k))) {
-            if (k.ScanCode) continue;          /* 方向键之类先丢掉 */
-            return (int)k.UnicodeChar;
-        }
-        gEnv.BS->Stall(10000);                 /* 10 ms */
+        int k = in_getkey();
+        if (k >> 16) continue;                 /* 方向键之类先丢掉 */
+        return (int)(k & 0xFFFF);
     }
 }
 
@@ -365,15 +362,7 @@ static TND_ABI void api_gotoxy(int x, int y) {
 
 /* 阻塞读键，**保留扫描码** —— 方向键的 UnicodeChar 是 0，
  * 只看它等于什么都没读到。这是写全屏程序的前提。 */
-static TND_ABI int api_getkey(void) {
-    EFI_INPUT_KEY k;
-    if (!gEnv.ST || !gEnv.ST->ConIn) return 0;
-    for (;;) {
-        if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k)))
-            return (int)(((UINT32)k.ScanCode << 16) | (UINT32)k.UnicodeChar);
-        gEnv.BS->Stall(10000);
-    }
-}
+static TND_ABI int api_getkey(void) { return in_getkey(); }
 
 static TND_ABI int api_cols(void) { return (int)con_cols(); }
 static TND_ABI int api_rows(void) { return (int)con_rows(); }
@@ -418,6 +407,14 @@ static TND_ABI void api_screen(TND_SCREEN *out) {
     out->Reserved      = 0;
 }
 
+/* ------------------------------------------------------------- 输入后端（v2.5）
+ * 驱动注册一个输入后端。逻辑在 log.c 的路由层，这里只做 ABI 适配。 */
+static TND_ABI int api_in_register(const TND_INPUT *in) {
+    if (!in || !in->GetKey) return -1;
+    in_register(in);
+    return 0;
+}
+
 /* --------------------------------------------------------------- 驱动（v2.5）
  * 驱动调这一个函数登记自己。真正的逻辑在 drv.c ——
  * 这里只做 ABI 适配，不重复实现。 */
@@ -438,7 +435,8 @@ static const TND_API_TABLE gApi = {
     api_setattr, api_getattr,
     api_cursor,
     api_writecells, api_fill, api_scroll, api_screen,
-    api_drv_register
+    api_drv_register,
+    api_in_register
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

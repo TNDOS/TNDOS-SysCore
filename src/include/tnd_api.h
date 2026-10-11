@@ -196,6 +196,23 @@ typedef struct TND_DRIVER_DESC {
     void (*TND_ABI detach)(void *ctx);               /* 放开。暂时没人调 */
 } TND_DRIVER_DESC;
 
+/* ------------------------------------------------------------------ 输入后端（v2.5）
+ *
+ * 和 TND_CONSOLE 一个路数：**上层只问「当前后端」**，不问固件。
+ * 现在只有固件的 ConIn；PS/2 驱动注册一个之后就优先用它 ——
+ * 那就是「键盘不再依赖固件」的那一步。
+ *
+ * **驱动返回之后这个后端依然有效** —— 它住在驱动窗口，加载程序时不清零。
+ * 这是多窗口那个改动的直接收益。 */
+typedef struct {
+    tnd_u32     StructSize;
+    const char *Name;
+    /* 取一个键。0 = 现在没有；非 0 = (扫描码 << 16) | UnicodeChar ——
+     * 和固件 EFI_INPUT_KEY 的拼法一致，上层不用分两种情况。
+     * 拿不到字形时 UnicodeChar 可以是 0（方向键）。 */
+    int (*TND_ABI GetKey)(void);
+} TND_INPUT;
+
 /* ------------------------------------------------------------------ API 表 */
 typedef struct {
     tnd_u32 StructSize;
@@ -269,6 +286,10 @@ typedef struct {
      * 驱动调它登记自己。返回 0 成功；名字重复也返回失败 ——
      * **不静默覆盖**，覆盖是 bug 的温床。 */
     int  (*TND_ABI drv_register)(const TND_DRIVER_DESC *desc);
+
+    /* --- 输入后端（v2.5）
+     * 注册一个输入后端。**上层从此不再直连固件 ConIn。** */
+    int  (*TND_ABI in_register)(const TND_INPUT *in);
 
 } TND_API_TABLE;
 

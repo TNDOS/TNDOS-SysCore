@@ -240,6 +240,14 @@ typedef struct {
 } TND_CONSOLE;
 
 void        con_register(const TND_CONSOLE *c);
+
+/* ---- 输入后端（和 TND_CONSOLE 一个路数）
+ * 上层只问「当前后端」，不问固件。驱动注册一个之后键盘就不再依赖固件。 */
+void        in_register(const TND_INPUT *in);
+int         in_ready(void);
+const char *in_current(void);
+int         in_pollkey(void);   /* 非阻塞：(扫描码<<16)|UnicodeChar，0 = 没有 */
+int         in_getkey(void);    /* 阻塞 */
 int         con_select(const char *name);        /* 1 = 成功 */
 const char *con_current(void);
 void        con_report(void);                    /* 列出后端；当前那个打 * */

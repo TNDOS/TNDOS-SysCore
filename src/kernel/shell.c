@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS Shell
  * Built into kernel.efi for now; per the plan it becomes a separate user program.
  *
@@ -119,6 +119,7 @@ static void cmd_help(void) {
     con_puts("    REN <old> <new>   rename (UEFI has no rename: copy then delete)\r\n");
     con_puts("    COPY <src> <dst>  copy a file\r\n");
     con_puts("    VOL               show mounted drives\r\n");
+    con_puts("    KEYS              dump raw key events (input backend debug)\r\n");
     con_puts("    MEM               memory overview (UEFI map + PMM + heap)\r\n");
     con_puts("    MEMTEST           run memory self-tests\r\n");
     con_puts("    MODULES           list kernel modules and status\r\n");
@@ -359,6 +360,24 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "VOL"))     { con_puts("\r\n"); vfs_report(); return; }
+    /* 输入诊断：把每个键的扫描码和字符原样打出来。
+     * 接驱动的时候「到底收到了什么」比「界面对不对」有用得多。 */
+    if (!t_stricmp(cmd, "KEYS")) {
+        con_puts("  input backend: "); con_puts(in_current());
+        con_puts("\r\n  dumping raw keys for ~5s, ESC to stop\r\n  ");
+        for (int i = 0; i < 500; i++) {
+            int k = in_pollkey();
+            if (!k) { gEnv.BS->Stall(10000); continue; }
+            con_puts("[");
+            con_u64((UINT64)((k >> 16) & 0xFFFF));
+            con_puts(":'");
+            { int ch = k & 0xFF; if (ch >= 32 && ch < 127) con_putc((char)ch); else con_puts("?"); }
+            con_puts("'] ");
+            if ((k & 0xFF) == 27) break;
+        }
+        con_puts("\r\n  done\r\n");
+        return;
+    }
     /* PS2 命令暂时没有 —— 它要等驱动接口。
      * 见 docs/DRIVER-SDK.md：内核是 MS ABI，碰不到端口，硬件访问只能在 TNX 驱动里。 */
 
@@ -510,8 +529,14 @@ static void read_line(char *line, UINTN cap) {
 
     for (;;) {
         EFI_INPUT_KEY k;
-        EFI_STATUS s = gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k);
-        if (s == EFI_NOT_READY || EFI_ERROR(s)) { gEnv.BS->Stall(20000); continue; }
+        /* **走输入后端，不直连固件** —— 否则 PS/2 驱动注册了 shell 也收不到。
+         * 这里是行编辑的节奏点，所以用非阻塞的那个，自己 Stall。 */
+        {
+            int key = in_pollkey();
+            if (!key) { gEnv.BS->Stall(20000); continue; }
+            k.ScanCode    = (UINT16)((key >> 16) & 0xFFFF);
+            k.UnicodeChar = (UINT16)(key & 0xFFFF);
+        }
 
         if (k.ScanCode) {
             int redraw = 1;

@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * TNDDOS -- 输出层
  *   log_* : 只走串口，带 [log] 前缀 —— 给机器看的，用来做构建验证
  *   con_* : **路由到控制台服务层**（见 tnd.h 的 TND_CONSOLE）
@@ -90,6 +90,58 @@ int con_select(const char *name) {
 }
 
 const char *con_current(void) { return gCon ? gCon->Name : "(none)"; }
+
+/* ------------------------------------------------------------------ 输入后端
+ *
+ * 和 TND_CONSOLE 一个路数：**上层只问「当前后端」**，不问固件。
+ * 现在只有固件的 ConIn；PS/2 驱动注册一个之后就优先用它 ——
+ * 那就是「键盘不再依赖固件」的那一步。
+ *
+ * **驱动返回之后这个后端依然有效**：它住在驱动窗口，加载程序时不清零。
+ * 这是多窗口那个改动的直接收益，不是巧合。 */
+
+static const TND_INPUT *gIn = 0;
+
+void in_register(const TND_INPUT *in) {
+    if (!in) return;
+    gIn = in;
+    log_puts("[log] input backend -> ");
+    log_puts(in->Name ? in->Name : "(unnamed)");
+    log_puts("\r\n");
+}
+
+int in_ready(void) { return gIn != 0; }
+
+const char *in_current(void) {
+    if (!gIn) return "uefi (ConIn)";
+    return gIn->Name ? gIn->Name : "(unnamed)";
+}
+
+/* 非阻塞取键。0 = 现在没有。
+ * 非 0 = (扫描码 << 16) | UnicodeChar —— 和固件 EFI_INPUT_KEY 的拼法一致，
+ * 上层就不用分「后端给的」和「固件给的」两种情况。 */
+int in_pollkey(void) {
+    if (gIn && gIn->GetKey) {
+        int k = gIn->GetKey();
+        return k ? k : 0;
+    }
+    /* 没有后端就退回固件 —— **这正是我们要最终摆脱的那条路** */
+    if (gEnv.ST && gEnv.ST->ConIn) {
+        EFI_INPUT_KEY k;
+        if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k)))
+            return (int)(((UINT32)k.ScanCode << 16) | (UINT32)k.UnicodeChar);
+    }
+    return 0;
+}
+
+/* 阻塞取键 */
+int in_getkey(void) {
+    for (;;) {
+        int k = in_pollkey();
+        if (k) return k;
+        gEnv.BS->Stall(10000);   /* 10ms —— 和 API 那边原来的节奏一致 */
+    }
+}
 
 void con_report(void) {
     for (int i = 0; i < gBackendCount; i++) {
