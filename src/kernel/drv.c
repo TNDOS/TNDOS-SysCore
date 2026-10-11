@@ -14,6 +14,7 @@
  *   5) 驱动加载失败绝不能让系统起不来 —— 记一笔，继续。
  * ==========================================================================*/
 #include "tnd.h"
+#include "tnx.h"       /* TNX_MAGIC —— 用来判断驱动是不是 TNX */
 
 typedef struct {
     int        used;
@@ -290,7 +291,40 @@ EFI_STATUS drv_load(const char *path) {
     log_puts("[log] drv: "); log_puts(full); log_puts("  ");
     log_u64(total); log_puts(" bytes\r\n");
 
-    /* ==== 这一步就是 "load fs0:\xxx.efi" ==== */
+    /* ==== 是 TNX 就走 TNX 加载器，**不走固件** ====
+     *
+     * 这就是目标里那句「驱动以 TNX 形式加载，不再走固件 LoadImage」。
+     *
+     * **按内容判断，不按扩展名。** 扩展名是给人看的，魔术字才是事实 ——
+     * 一个叫 .EFI 的 TNX 也是 TNX。
+     *
+     * 位置选在**读完文件之后、LoadImage 之前**：文件已经读进来了，
+     * 不为了看一眼魔术字再去开一次。 */
+    if (total >= 8 && *(const UINT64 *)buf == TNX_MAGIC) {
+        int code = 0;
+        log_puts("[log] drv: TNX magic -> TNX loader (no LoadImage)\r\n");
+
+        /* **传 full 不传 path。** path 是配置里写的短名（NVME.TNX），
+         * 而这里已经把 "\EFI\TNDOS\DRIVERS\" 拼进去了；传短名的话
+         * 加载器会按默认路径找，找不到 —— 症状是 ENTRY-FAIL 而日志里
+         * 只字不提「没找到文件」。 */
+        s = tnx_load(full, &code, 0);       /* 它自己会再读一次文件 */
+        gEnv.BS->FreePool(buf);              /* 这份用不上了，还回去 */
+
+        d->loadStatus  = s;
+        d->startStatus = s;
+        d->imageSize   = total;
+        d->imageBuf    = 0;
+        /* **没有 LoadImage 就没有句柄。** 给个非 0 的哨兵位，好让 DRIVERS
+         * 的显示不把它当成加载失败 —— 但注释写清楚：这不是真的句柄。 */
+        d->handle = (EFI_HANDLE)1;
+
+        if (EFI_ERROR(s)) { gFail++; return s; }
+        gOk++;
+        return EFI_SUCCESS;
+    }
+
+    /* ==== 不是 TNX：这一步就是 "load fs0:\xxx.efi" ==== */
     s = gEnv.BS->LoadImage(0 /*BootPolicy=FALSE*/, gEnv.ImageHandle, 0, buf, total, &h);
     d->loadStatus = s;
     if (EFI_ERROR(s) || !h) {
