@@ -189,7 +189,7 @@ QEMU 的 `-drive file=fat:rw:<目录>`（vvfat）读没问题，**写回时会�
 ERROR: block/vvfat.c:2429: commit\_direntries: assertion failed: (mapping)
 ```
 
-TNDDOS 是个 DOS，不能拿一个写不进去的文件系统来测。所以 `tools/mkfat.ps1` 自己造一块
+TNDDOS 是个 DOS，不能拿一个写不进去的文件系统来测。所以 `repos/TNDOS-ToolsKit/mkfat.ps1` 自己造一块
 真 FAT16：MBR + 单分区（type 0xEF）+ 双 FAT + 固定根目录 + 数据区，只支持 8.3 短名
 （本项目的 ESP 里全是 8.3，省掉长文件名一整块复杂度）。
 ---

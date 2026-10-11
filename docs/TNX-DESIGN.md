@@ -56,7 +56,7 @@ TNX **不需要自己的编译器，也不需要自己的链接器**：
 hello.c -> clang -> hello.o -> ld.lld -> hello.elf -> tnxpack -> HELLO.TNX
 ```
 
-`tools/tnxpack.ps1` 只做最后一步：读 ELF64 的 `PT_LOAD` 段，写 TNX 的段表加段数据。
+`repos/TNDOS-ToolsKit/tnxpack.ps1` 只做最后一步：读 ELF64 的 `PT_LOAD` 段，写 TNX 的段表加段数据。
 （用 PowerShell 而非 C 是现实取舍 —— 这台机器上只有 clang，没有 C 运行库，
 写 C 版宿主工具反而要手搓文件 IO。等 SDK 成形再重写并自举。）
 

@@ -201,7 +201,7 @@ ERROR: block/vvfat.c:2429: commit_direntries: assertion failed: (mapping)
 ```
 
 TNDDOS is a DOS; it cannot be tested against a file system you cannot write to. So
-`tools/mkfat.ps1` builds a real FAT16 volume: MBR + one partition (type 0xEF) + two FATs +
+`repos/TNDOS-ToolsKit/mkfat.ps1` builds a real FAT16 volume: MBR + one partition (type 0xEF) + two FATs +
 a fixed root directory + a data area, 8.3 short names only (everything on our ESP is 8.3,
 which removes the whole long-filename problem area).
 
