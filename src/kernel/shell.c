@@ -359,6 +359,8 @@ void shell_exec_line(char *line) {
         return;
     }
     if (!t_stricmp(cmd, "VOL"))     { con_puts("\r\n"); vfs_report(); return; }
+    /* PS2 命令暂时没有 —— 它要等驱动接口。
+     * 见 docs/DRIVER-SDK.md：内核是 MS ABI，碰不到端口，硬件访问只能在 TNX 驱动里。 */
 
     if (!t_stricmp(cmd, "DIR"))  { vfs_dir(*arg ? arg : "."); return; }
     if (!t_stricmp(cmd, "CD") || !t_stricmp(cmd, "CHDIR")) {

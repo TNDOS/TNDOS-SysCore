@@ -130,6 +130,28 @@ UINTN con_get_attr(void);
  * 字体是**我们的数据**，不是固件服务 —— UEFI 的字体协议是 Boot Services，
  * ExitBootServices 之后就没了。所以从磁盘读进来，之后不依赖固件。
  * 没加载成功时调用方退回内嵌的 8x12 字体，控制台照样能用。 */
+/* ---- 端口 I/O
+ * 内核是 MS ABI，**不能用内联汇编**（x64 上 MSVC/clang 都不支持）。
+ * 所以用 clang 的 MS 内建函数；因为 -ffreestanding 没有 intrin.h，自己声明。
+ * （TNX 驱动是 SysV，那边可以直接写内联汇编 —— 两条路都验证过。） */
+UINT8          __inbyte(unsigned short Port);
+void           __outbyte(unsigned short Port, unsigned char Data);
+unsigned short __inword(unsigned short Port);
+void           __outword(unsigned short Port, unsigned short Data);
+unsigned long  __indword(unsigned short Port);
+void           __outdword(unsigned short Port, unsigned long Data);
+
+/* ---- PS/2 键盘（kernel/ps2.c）
+ * **暂时编进内核** —— 驱动接口定了之后再抽成 TNX 驱动。
+ * ps2_poll() 返回：>0 一个 ASCII；0 没按键；-1 是没产出字符的键。 */
+int  ps2_init(void);
+int  ps2_poll(void);
+int  ps2_ready(void);
+int  ps2_shift(void);
+int  ps2_ctrl(void);
+int  ps2_alt(void);
+void ps2_echo_test(void);
+
 /* ---- TNX 架构标识（kernel/tnx.c）
  * 只给显示用。加载器内部只跟编译期的 TND_BUILD_MACHINE 比，**不查表**。 */
 const char *tnx_machine_name(tnx_u8 m);
