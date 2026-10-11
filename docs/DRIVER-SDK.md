@@ -873,6 +873,57 @@ ERDP    不是寄存器 -> 读回 0
 
 （这次 dump 用 `%p`（0x + 16 位补零）绕开了精简 printf 不支持宽度修饰符那个坑。）
 
+### ✅ 解了：QEMU 的 op 寄存器偏移和我用的**不一样**
+
+去读 QEMU 的 `hw/usb/hcd-xhci.c`，它的 opreg switch 用的是：
+
+```
+case 0x00: USBCMD        case 0x04: USBSTS      case 0x08: PAGESIZE
+case 0x14: DNCTRL
+case 0x18: CRCR low      case 0x1c: CRCR high
+case 0x30: DCBAAP low    case 0x34: DCBAAP high
+case 0x38: CONFIG
+```
+
+**而我原先按规范字面写的是 `CRCR=0x10 / DCBAAP=0x18 / CONFIG=0x20` —— 全错位。**
+
+```
+后果极具迷惑性：
+  写 op+0x18 以为是 DCBAAP  ->  实际写进了 **CRCR**。
+     而 CRCR 收 64 位指针、读回也正常，
+     于是「DCBAAP 写成功了」这个假象一直成立，把排查带去别处。
+  写 op+0x10 以为是 CRCR    ->  那里没有寄存器 -> 读回 0
+  写 op+0x20 以为是 CONFIG  ->  那里没有寄存器 -> 写被静默丢弃
+
+哨兵实验（上面那段）和这个完全一致：op+0x18 留着值、op+0x20 什么都没有。
+```
+
+**Runtime 区（interrupter）的偏移是另一回事，那一组是对的**
+（源码 3060 行起：`+0x08 ERSTSZ / +0x10 ERSTBA / +0x18 ERDP`）——
+所以那三个改完就通了。**同一个控制器里两组寄存器，一组错一组对**，
+这也是为什么当时看起来「有的能写有的不能」。
+
+**改完之后的实测：六个寄存器全部落位**
+
+```
+[usb]   DCBAAP  write 0x0000000002004000 -> read 0x0000000002004000   ✓
+[usb]   CONFIG  write 64                 -> read 64                   ✓  <- 原来是 0
+[usb]   ERSTBA  write 0x0000000002006000 -> read 0x0000000002006000   ✓
+[usb]   ERSTSZ  write 1                  -> read 1                    ✓
+[usb]   ERDP    write 0x0000000002005000 -> read 0x0000000002005000   ✓
+[usb]   CRCR    write 0x0000000002007001 -> read 0x0000000002007001   ✓  <- 原来是 0
+[usb]   running (HCH=0)
+[usb]   ** all three matched -- rings are live **
+```
+
+**命令环和事件环都活了。下一步是发第一条命令（Address Device）。**
+
+**教训（比这个 bug 值钱）**：「写进去能读回」不等于「写对了寄存器」。
+CRCR 和 DCBAAP 都是 64 位地址寄存器 —— 往错的位置写一个地址，**读回是同意的**。
+要区分它们，得写**只有目标寄存器会拒绝的值**（这就是哨兵实验的价值），
+或者像这次一样**去读实现源码**。
+真机上以规范为准；这里是 QEMU，以实测 + 源码为准 —— 代码里已经写明了。
+
 ### 这两个卡点的共同点
 
 ```
