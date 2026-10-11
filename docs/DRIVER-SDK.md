@@ -918,6 +918,71 @@ case 0x38: CONFIG
 
 **命令环和事件环都活了。下一步是发第一条命令（Address Device）。**
 
+### xHCI 参考：从 QEMU 源码抄下来的确切事实
+
+这些东西查一次就够，记在这儿省得下次重查 —— **每一条都是「照规范字面推会出错」的**。
+
+```
+操作寄存器偏移（相对 op 基址 = BAR + CAPLENGTH）—— QEMU hcd-xhci.c 的 opreg switch
+  0x00 USBCMD      0x04 USBSTS      0x08 PAGESIZE
+  0x14 DNCTRL
+  0x18 CRCR low    0x1c CRCR high
+  0x30 DCBAAP low  0x34 DCBAAP high
+  0x38 CONFIG
+
+Runtime 区（相对 interrupter 基址 = BAR + RTSOFF + 0x20）
+  0x00 IMAN   0x04 IMOD   0x08 ERSTSZ
+  0x10 ERSTBA low  0x14 ERSTBA high
+  0x18 ERDP low    0x1c ERDP high
+  （RTSOFF 在能力区 +0x18；这组偏移是**对的**，和规范一致）
+
+门铃
+  DBOFF 在能力区 +0x14（QEMU 报 0x2000）
+  往 (BAR + DBOFF + 4*slot) 写 32 位值 —— slot=0 且值=0 表示敲命令门铃
+  QEMU 内部：reg >>= 2 得到门铃号；reg==0 且 val==0 -> xhci_process_commands()
+
+TRB 类型号（hcd-xhci.h 的 TRBType 枚举，原文）
+  TR_NORMAL=1  TR_SETUP=2  TR_DATA=3  TR_STATUS=4  TR_LINK=6
+  TR_NOOP=8                       <- 传输类的 No-Op
+  CR_ENABLE_SLOT=9   CR_ADDRESS_DEVICE=11   CR_CONFIGURE_ENDPOINT=12
+  CR_NOOP=23                      <- **命令**类的 No-Op
+  ER_TRANSFER=32     ER_COMMAND_COMPLETE=33
+
+TRB 布局（16 字节 = 4 个 dword）
+  [0][1]  parameter（64 位）
+  [2]     status
+  [3]     control: bits 15:10 = 类型, bit 0 = cycle
+
+事件 TRB（xhci_write_event 里怎么填的，原文）
+  parameter = event->ptr
+  status    = length | (**ccode << 24**)     <- 完成码在 bits 31:24,不是第 8 字节
+  control   = (slotid << 24) | (epid << 16) | flags | (type << 10)
+  生产者 cycle 从 1 开始 —— 所以「事件环上有事件」= control 的 bit0 == 1
+
+完成码（TRBCCode）
+  CC_SUCCESS=1  CC_TRB_ERROR=5  CC_STALL_ERROR=6
+  CC_NO_SLOTS_ERROR=9  CC_SLOT_NOT_ENABLED_ERROR=11  CC_EP_NOT_ENABLED_ERROR=12
+```
+
+### ⚠️ 未解：写第一条命令的代码会让驱动卡住
+
+按上面的事实写了「放一个 No-Op 命令 TRB -> 敲门铃 -> 等完成事件」，
+**结果驱动卡住**：串口里有 `drv: registered` 但没有 `drv: bound`，
+说明 `attach` 没返回；屏幕停在 `attach` 里的 `reset done`。
+
+```
+回退这段代码 -> 连跑两次都完全正常（六个寄存器全落位、drv: bound 在）。
+加上这段代码 -> 卡住。
+```
+
+**但卡的位置在我这段代码**之前** —— 加在 tnx_main 末尾的代码，
+影响了前面 attach 的行为。这和 NVMe 那个 #GP 是**同一族**：
+代码布局一变，行为就变。**那一族至今没有解释。**
+
+代码存成 `build/WIP-first-command.patch`，树是干净的（基线）。
+**下一次动它之前，先解决「布局敏感」这一类问题** —— 否则就是在
+一个会漂的地基上盖东西。
+
 **教训（比这个 bug 值钱）**：「写进去能读回」不等于「写对了寄存器」。
 CRCR 和 DCBAAP 都是 64 位地址寄存器 —— 往错的位置写一个地址，**读回是同意的**。
 要区分它们，得写**只有目标寄存器会拒绝的值**（这就是哨兵实验的价值），
