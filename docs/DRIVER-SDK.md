@@ -979,7 +979,73 @@ TRB 布局（16 字节 = 4 个 dword）
 影响了前面 attach 的行为。这和 NVMe 那个 #GP 是**同一族**：
 代码布局一变，行为就变。**那一族至今没有解释。**
 
-代码存成 `build/WIP-first-command.patch`，树是干净的（基线）。
+### ✅ 解了一半：64 位寄存器**必须分两次 32 位写**
+
+读 QEMU 的 `xhci_oper_write` 才看出来：
+
+```c
+static const MemoryRegionOps xhci_oper_ops = {
+    .valid.min_access_size = 4,
+    .valid.max_access_size = sizeof(dma_addr_t),   // = 8 -> 8 字节写**不拆**
+};
+
+static void xhci_oper_write(void *ptr, hwaddr reg, uint64_t val, unsigned size) {
+    switch (reg) {                    // **只按 reg 分派**，不看 size
+    case 0x18: /* CRCR low  */ crcr_low  = ...; break;
+    case 0x1c: /* CRCR high */ crcr_high = val;
+        xhci_ring_init(xhci, &xhci->cmd_ring, base);   // **ring 初始化只在这里**
+```
+
+**一次 8 字节写会以低地址为 reg 整体进入 handler，高 dword 那条 case 永不执行。**
+对 CRCR 来说后果是致命的：`xhci_ring_init`（设 `cmd_ring.dequeue` 和 `ccs`）只在 high 的 case 里调用 —— 于是命令环从未初始化，敲门铃取不到 TRB，**没有完成事件，而且不报错**。
+
+**而读回看不出来**：低 dword 正是我们写的值，高 dword 本来就该是 0（地址 < 4GB）。
+**又一次「写进去能读回」的假象** —— 和 op+0x18 那次是同一个坑。
+
+修法很简单：
+
+```c
+static void wr64split(tnd_u64 op, tnd_u32 o, tnd_u64 v) {
+    *(volatile tnd_u32 *)(op + o)     = (tnd_u32)(v & 0xFFFFFFFFu);
+    *(volatile tnd_u32 *)(op + o + 4) = (tnd_u32)(v >> 32);
+}
+```
+
+CRCR / DCBAAP / ERSTBA / ERDP 四处都改了。改完六个寄存器仍然全部落位。
+
+### ⚠️ 但敲了门铃之后，访客卡死在**固件**里
+
+修完 64 位写之后，门铃**真的被处理了**（之前环没初始化，敲了没反应）——
+然后访客卡住。用 QEMU monitor 的 `info registers` 拿 RIP：
+
+```
+RIP = 0x0EF968B9     （3 秒后仍是同一个值 —— 卡住不动）
+RBX = 0x000000C000000044     <- **BAR0 + 0x44 = USBSTS**
+```
+
+**RIP 不在驱动窗口（0x2000000）**，而在固件区（`0x0EF9xxxx`，和 IDTR 同区）。
+配上 RBX 指着 USBSTS —— 这是**固件的 XhciDxe 在轮询控制器**。
+
+### 同一族问题，第三次
+
+```
+PS/2 输入接管   卡在「OVMF 的 Ps2KeyboardDxe 还在轮询同一个 8042」
+USB 控制器接管  卡在「OVMF 的 XhciDxe 还在轮询同一个 USBSTS」
+```
+
+**固件自己的驱动还活着，我们在它眼皮底下重配了控制器，它就转不出去。**
+
+这不是 USB 的问题，是**整个 SP3 的一个结构性前提**：只要还用着固件的
+Boot Services，固件就仍然拥有这些设备。可能的出路（未验证）：
+
+```
+1  gBS->DisconnectController()  把固件的驱动从设备上摘下来
+   —— UEFI 里接管设备的标准做法，理论上能同时解决 PS/2 和 USB 两处
+2  自己停掉固件那个驱动的定时事件
+3  ExitBootServices —— 但那要自己接管中断和内存，代价大得多
+```
+
+**这条路（1）值得优先试** —— 它是唯一一个能一次解决两处卡点的。
 **下一次动它之前，先解决「布局敏感」这一类问题** —— 否则就是在
 一个会漂的地基上盖东西。
 
