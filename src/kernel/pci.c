@@ -209,7 +209,16 @@ void pci_scan(void) {
                 d = &gPciDev[gPciCount];
                 t_memzero(d, sizeof(*d));
                 d->StructSize = sizeof(TND_DEVICE);
-                d->Type   = TND_DRV_BUS;        /* 先都当总线设备；认领它的驱动会改语义 */
+                /* **按 class code 定类型** —— 驱动就是靠这个自称的。
+                 * 原来一律标 BUS 是个占位，结果显卡驱动没法说「我要显示设备」。
+                 * class 的高字节是基类：01=存储 03=显示 0C=串行总线。 */
+                switch ((cls >> 24) & 0xFF) {
+                case 0x01: d->Type = TND_DRV_BLOCK;   break;   /* 大容量存储：AHCI/NVMe */
+                case 0x03: d->Type = TND_DRV_DISPLAY; break;   /* 显示：显卡 */
+                case 0x0C: d->Type = TND_DRV_BUS;     break;   /* 串行总线：USB */
+                default:   d->Type = TND_DRV_BUS;     break;
+                }
+                d->Class  = cls >> 8;           /* 去掉 revision，留 class+subclass+progif */
                 d->Unit   = (UINT32)gPciCount;
                 d->Vendor = (UINT32)(id & 0xFFFF);
                 d->Device = (UINT32)(id >> 16);
@@ -260,6 +269,7 @@ void pci_report(void) {
         const TND_DEVICE *d = &gPciDev[i];
         con_puts("    "); con_puts(d->Name);
         con_puts("   " ); con_hex(((UINT64)d->Vendor << 16) | (UINT64)d->Device);
+        con_puts("   class="); con_hex((UINT64)d->Class);
         con_puts("   bar0="); con_hex(d->Base);
         con_puts("\r\n");
     }

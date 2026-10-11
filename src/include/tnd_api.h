@@ -177,6 +177,7 @@ typedef struct {
     tnd_u32 Irq;           /* **现在恒为 0** —— 没有 IDT，位置先留着 */
     tnd_u32 Vendor;
     tnd_u32 Device;
+    tnd_u32 Class;         /* PCI 类代码（高 24 位有意义），非 PCI 设备为 0 */
     char    Name[16];      /* 给人看：VGA / PS2 / AHCI */
 } TND_DEVICE;
 

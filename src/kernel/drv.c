@@ -90,8 +90,17 @@ int drv_desc_count(void) { return gDrvDescCount; }
  * PCI 设备将来由 PCI 总线驱动枚举，不走这张表。
  *
  * PS/2 的 Base 是**数据端口号**（0x60），Size 是端口数（2：0x60 和 0x64）。 */
+/* **用指定初始化，不用位置初始化** —— TND_DEVICE 是会长的（刚加了 Class），
+ * 位置初始化在加字段时会静默错位，而且报的错跟真正的原因隔着十万八千里
+ * （这次是 "'PS2'" 被塞进 u32 字段）。 */
 static const TND_DEVICE gBuiltin[] = {
-    { sizeof(TND_DEVICE), TND_DRV_INPUT, 0, 0, 0x60, 2, 0, 0, 0, "PS2" },
+    {
+        .StructSize = sizeof(TND_DEVICE),
+        .Type       = TND_DRV_INPUT,
+        .Base       = 0x60,          /* 8042 数据端口 */
+        .Size       = 2,             /* 0x60 和 0x64 */
+        .Name       = "PS2",
+    },
 };
 #define TND_BUILTIN_COUNT ((int)(sizeof(gBuiltin) / sizeof(gBuiltin[0])))
 
