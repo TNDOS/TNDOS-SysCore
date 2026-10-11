@@ -27,7 +27,7 @@ and the version plan in [docs/ROADMAP.md](docs/ROADMAP.md) (Chinese).
 | **TNDOS-ToolsKit** | Host tools: tnxpack (ELF64 to TNX), tnxdump (inspector), mkfat (FAT16 image) |
 | **WebSrv** | Project website and version index |
 
-The TNX format spec is [docs/TNX-SPEC.md](docs/TNX-SPEC.md) (frozen at v1.0).
+The TNX format spec is [docs/TNX-SPEC.md](docs/TNX-SPEC.md) (**v1.0 frozen; v1.1 is current**).
 
 Bug reports welcome.
 
@@ -217,7 +217,7 @@ All documents below are in Chinese.
 | [docs/PITFALLS.md](docs/PITFALLS.md) | Bugs actually hit during development (all "compiled fine, only showed up at runtime") |
 | [docs/DRIVERS.md](docs/DRIVERS.md) | Driver model (`DEVICE=`) semantics and conventions |
 | [docs/CONSOLE.md](docs/CONSOLE.md) | Console character-set policy and the right path to localisation |
-| [docs/TNX-SPEC.md](docs/TNX-SPEC.md) | **The TNX executable format specification** (v1.0, frozen) |
+| [docs/TNX-SPEC.md](docs/TNX-SPEC.md) | **The TNX executable format specification** (v1.0 frozen; v1.1 current) |
 | [docs/TNX-DESIGN.md](docs/TNX-DESIGN.md) | TNX design trade-offs, v1 limits and anti-goals |
 | [docs/TODO.md](docs/TODO.md) | Known issues, TODOs, what comes next |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Version roadmap |

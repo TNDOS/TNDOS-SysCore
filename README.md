@@ -34,7 +34,7 @@ English: [README.en.md](README.en.md)
 |**TNDOS-ToolsKit**|宿主机工具：tnxpack（ELF64 转 TNX）、tnxdump（检查器）、mkfat（FAT16 映像）|
 |**WebSrv**|项目网站与版本索引|
 
-TNX 格式规范见 [docs/TNX-SPEC.md](docs/TNX-SPEC.md)（已冻结在 v1.0）。
+TNX 格式规范见 [docs/TNX-SPEC.md](docs/TNX-SPEC.md)（**v1.0 已冻结；v1.1 是当前版本**）。
 
 有 Bug 可以提交，欢迎完善！！！
 
@@ -202,7 +202,7 @@ TNDDOS 是个 DOS，不能拿一个写不进去的文件系统来测。所以 `r
 |[docs/PITFALLS.md](docs/PITFALLS.md)|开发中真抓到的坑（全是"编译过、跑起来才现形"）|
 |[docs/DRIVERS.md](docs/DRIVERS.md)|驱动模型（`DEVICE=`）语义与约定|
 |[docs/CONSOLE.md](docs/CONSOLE.md)|控制台字符集策略、本地化的正确路径|
-|[docs/TNX-SPEC.md](docs/TNX-SPEC.md)|**TNX 可执行格式规范**（v1.0，已冻结）|
+|[docs/TNX-SPEC.md](docs/TNX-SPEC.md)|**TNX 可执行格式规范**（v1.0 已冻结；v1.1 当前）|
 |[docs/TNX-DESIGN.md](docs/TNX-DESIGN.md)|TNX 的设计取舍、v1 边界与反目标|
 |[docs/TODO.md](docs/TODO.md)|已知问题、待办、后续路线|
 |[docs/ROADMAP.md](docs/ROADMAP.md)|版本路线图|
