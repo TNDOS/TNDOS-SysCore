@@ -89,6 +89,9 @@ void     pci_scan(void);
 int      pci_ready(void);
 UINT64   pci_ecam_base(void);
 UINT32   pci_read32(UINT8 bus, UINT8 dev, UINT8 fn, UINT8 off);
+/* 把一个 PCI 设备从固件的驱动手里摘下来（DisconnectController）。
+ * 返回被摘掉的驱动个数；0 = 没找到那个设备，<0 = 内核这边出错。 */
+int      pci_disown(int bus, int dev, int fun);
 int      pci_device_count(void);
 const TND_DEVICE *pci_device(int i);
 void     pci_report(void);

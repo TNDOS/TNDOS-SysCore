@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- 程序运行环境（TNX API v2 的实现）
  *
  * 这个文件把"DOS 的骨架"给到 TNX 程序：句柄表、标准输入输出、argv、目录遍历。
@@ -422,6 +422,28 @@ static TND_ABI int api_drv_register(const TND_DRIVER_DESC *desc) {
     return drv_register(desc);
 }
 
+/* ------------------------------------------------------- PCI 设备归属（v2.6）
+ *
+ * **把一个 PCI 设备从固件的驱动手里摘下来。**
+ *
+ * 为什么需要它：Boot Services 还活着的时候，固件自己的驱动仍然拥有设备 ——
+ * OVMF 的 Ps2KeyboardDxe 还在轮询 8042，XhciDxe 还在用 USB 端口。
+ * 我们插进去之后两边抢同一个硬件，症状千奇百怪：
+ *   键盘「一串里只有最后一个到」、USB 完成事件被顶掉、控制器转不出去……
+ *
+ * UEFI 的标准做法是 DisconnectController —— 把挂在设备 handle 上的驱动卸掉。
+ * 内核有 gBS，驱动（TNX）拿不到固件服务，所以只能由内核代做。
+ *
+ * **只对调用者自己那个设备做。** GOP 挂在 00:01.0 上，把它的驱动摘了屏幕就黑。
+ * 返回被摘掉的驱动个数（0 表示没找到那个设备，或它本来就没驱动）。 */
+static TND_ABI int api_pci_own(int bus, int dev, int fun) {
+    int n = pci_disown(bus, dev, fun);      /* 真正的实现在 pci.c */
+    log_puts("[log] pci_own: bdf=");
+    log_u64((UINT64)((bus << 16) | (dev << 8) | fun));
+    log_puts(" -> "); log_u64((UINT64)(n < 0 ? 0 : n)); log_puts(" driver(s)\r\n");
+    return n;
+}
+
 /* ------------------------------------------------------------------ 表 */
 static const TND_API_TABLE gApi = {
     sizeof(TND_API_TABLE), TND_API_VERSION,
@@ -436,7 +458,8 @@ static const TND_API_TABLE gApi = {
     api_cursor,
     api_writecells, api_fill, api_scroll, api_screen,
     api_drv_register,
-    api_in_register
+    api_in_register,
+    api_pci_own
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- TNX 程序能用的内核 API（v2）
  *
  * v1 只有 puts/alloc/free/ticks —— 那个规模什么都写不了，连 MORE 都不行
@@ -40,7 +40,7 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020500u
+#define TND_API_VERSION 0x00020600u
 
 /* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
  * 没法照搬，固件给什么形状就是什么形状。
@@ -183,6 +183,11 @@ typedef struct {
     tnd_u32 Device;
     tnd_u32 Class;         /* PCI 类代码（高 24 位有意义），非 PCI 设备为 0 */
     char    Name[16];      /* 给人看：VGA / PS2 / AHCI */
+
+    /* --- v2.6：PCI 的 bus / dev / fun
+     * 驱动可以用它调 tnd_pci_own 把设备从**固件的驱动**手里摘下来。
+     * 非 PCI 设备（内置的 8042 那种）全为 0。 */
+    tnd_u32 Bus, Dev, Fun;
 } TND_DEVICE;
 
 /* 驱动描述 —— 驱动填好交给 drv_register。
@@ -295,6 +300,17 @@ typedef struct {
     /* --- 输入后端（v2.5）
      * 注册一个输入后端。**上层从此不再直连固件 ConIn。** */
     int  (*TND_ABI in_register)(const TND_INPUT *in);
+
+    /* --- PCI 设备归属（v2.6）
+     * 把「bus:dev.fun」这个 PCI 设备**从固件的驱动手里摘下来**
+     * （DisconnectController）。返回被摘掉的驱动个数；
+     * 0 表示没找到那个设备，<0 表示内核这边出错。
+     *
+     * 为什么需要：Boot Services 还活着时固件的驱动仍然拥有设备，两边抢同一个
+     * 硬件。**PS/2 输入接管和 USB 都被这件事挡住过。**
+     *
+     * **只对自己那个设备调** —— GOP 挂在 00:01.0 上，摘了它屏幕就黑。 */
+    int  (*TND_ABI pci_own)(int bus, int dev, int fun);
 
 } TND_API_TABLE;
 

@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS —— PCI 枚举（走 ECAM）
  *
  * **为什么不用 0xCF8/0xCFC：内核是 MS ABI，碰不到端口。**
@@ -163,6 +163,49 @@ int pci_init(void) {
  * 类代码、BAR、中断这些东西先只记录，不解释 —— 解释是各个驱动自己的事。 */
 
 #define TND_MAX_PCI 48
+/* ------------------------------------------------------------------ v2.6
+ * **把一个 PCI 设备从固件的驱动手里摘下来。**
+ *
+ * Boot Services 还活着的时候，固件自己的驱动仍然拥有设备 —— OVMF 的
+ * Ps2KeyboardDxe 还在轮询 8042，XhciDxe 还在用 USB 端口。我们插进去之后
+ * 两边抢同一个硬件，症状千奇百怪（键盘只剩最后一个字符、USB 完成事件被
+ * 顶掉、控制器转不出去）。
+ *
+ * UEFI 的标准做法是 DisconnectController。内核有 gBS，驱动（TNX）拿不到
+ * 固件服务，所以只能由内核代做。
+ *
+ * **只对调用者自己那个设备做。** GOP 挂在 00:01.0 上，摘了它屏幕就黑。 */
+int pci_disown(int bus, int dev, int fun) {
+    EFI_HANDLE *buf = 0;
+    UINTN count = 0, i;
+    int done = 0;
+
+    if (!gEnv.BS || !gEnv.BS->LocateHandleBuffer || !gEnv.BS->DisconnectController)
+        return -1;
+
+    if (EFI_ERROR(gEnv.BS->LocateHandleBuffer(2 /* ByProtocol */,
+                                              (EFI_GUID *)&gEfiPciIoProtocolGuid,
+                                              0, &count, &buf)) || !buf)
+        return -1;
+
+    for (i = 0; i < count; i++) {
+        EFI_PCI_IO_PROTOCOL *io = 0;
+        UINTN seg = 0, b = 0, d = 0, f = 0;
+
+        if (EFI_ERROR(gEnv.BS->HandleProtocol(buf[i], &gEfiPciIoProtocolGuid, (VOID **)&io)) || !io)
+            continue;
+        if (!io->GetLocation) continue;
+        if (EFI_ERROR(io->GetLocation(io, &seg, &b, &d, &f))) continue;
+
+        if ((int)b == bus && (int)d == dev && (int)f == fun) {
+            if (!EFI_ERROR(gEnv.BS->DisconnectController(buf[i], 0, 0))) done++;
+        }
+    }
+
+    if (gEnv.BS->FreePool) gEnv.BS->FreePool(buf);
+    return done;
+}
+
 static TND_DEVICE gPciDev[TND_MAX_PCI];
 static int gPciCount = 0;
 
@@ -221,6 +264,7 @@ void pci_scan(void) {
                 d->Class  = cls >> 8;           /* 去掉 revision，留 class+subclass+progif */
                 d->Unit   = (UINT32)gPciCount;
                 d->Vendor = (UINT32)(id & 0xFFFF);
+    d->Bus = bus; d->Dev = dev; d->Fun = fn;   /* v2.6：给 tnd_pci_own 用 */
                 d->Device = (UINT32)(id >> 16);
                 d->Base   = bar0 & 0xFFFFFFF0u;  /* 只取地址，先不管 I/O 空间标记 */
                 d->Size   = 0;

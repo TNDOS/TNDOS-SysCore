@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS — 驱动加载器（M4 起点）
  *
  * 语义按方案：   DEVICE=<文件>   ≈   UEFI Shell 的   load fs0:\<文件>
@@ -138,6 +138,20 @@ static int offer(const TND_DRIVER_DESC *d, const TND_DEVICE *dev) {
 
     if (!d->probe || !d->attach) return 0;
     if (!d->probe(dev)) return 0;
+
+    /* **认领之前，先把固件的驱动从这个设备上摘掉。**
+     *
+     * Boot Services 还活着时固件的驱动仍然拥有设备 —— 两边抢同一个硬件的
+     * 症状千奇百怪（键盘只剩最后一个字符、USB 完成事件被顶掉、控制器转不出去）。
+     * **驱动认领设备的那一刻，就是该把它拿过来的时候。**
+     *
+     * 靠 Vendor 判断是不是 PCI 设备（内置设备 Vendor 为 0）。
+     * 摘不到（本来就没驱动）不算错。 */
+    if (dev->Vendor != 0) {
+        int ndis = pci_disown((int)dev->Bus, (int)dev->Dev, (int)dev->Fun);
+        log_puts("[log] drv: pci_disown for "); log_puts(dev->Name);
+        log_puts(" -> "); log_u64((UINT64)(ndis < 0 ? 0 : ndis)); log_puts(" driver(s)\r\n");
+    }
 
     if (gBindCount >= TND_MAX_BINDINGS) {
         log_puts("[log] drv: too many bindings\r\n");

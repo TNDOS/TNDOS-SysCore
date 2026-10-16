@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS Shell
  * Built into kernel.efi for now; per the plan it becomes a separate user program.
  *
@@ -362,6 +362,48 @@ void shell_exec_line(char *line) {
     }
     if (!t_stricmp(cmd, "VOL"))     { con_puts("\r\n"); vfs_report(); return; }
     if (!t_stricmp(cmd, "PCI"))     { pci_report(); return; }
+    /* **把 PCI 设备从固件的驱动手里摘下来**（v2.6 的 pci_own）。
+     * 用法：OWN 0:3.0      bus:dev.fun
+     * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
+     * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
+    if (!t_stricmp(cmd, "OWN")) {
+        int v[3] = { 0, 0, 0 };
+        int k = 0;
+        const char *s = arg;
+        while (*s && k < 3) {
+            int x = 0, got = 0;
+            for (;;) {
+                int c = (unsigned char)*s;
+                if (c >= '0' && c <= '9') x = x * 16 + (c - '0');
+                else if (c >= 'a' && c <= 'f') x = x * 16 + (c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') x = x * 16 + (c - 'A' + 10);
+                else break;
+                s++; got = 1;
+            }
+            if (!got) break;
+            v[k++] = x;
+            if (*s == ':' || *s == '.') s++; else break;
+        }
+        if (k != 3) { con_puts("  usage: OWN bus:dev.fun    e.g. OWN 0:3.0\r\n"); return; }
+        {
+            const TND_API_TABLE *api = api_get_table();
+            int n = (api && api->pci_own) ? api->pci_own(v[0], v[1], v[2]) : -1;
+            char nb[12]; int i2;
+            con_puts("  pci_own ");
+            for (i2 = 0; i2 < 3; i2++) {
+                const char *d = "0123456789ABCDEF";
+                con_putc(d[(v[i2] >> 4) & 0xF]); con_putc(d[v[i2] & 0xF]);
+                con_putc(i2 == 0 ? ':' : (i2 == 1 ? '.' : ' '));
+            }
+            if (n < 0) { con_puts("-> api unavailable\r\n"); return; }
+            if (n > 99) n = 99;
+            nb[0] = (char)('0' + (n / 10)); nb[1] = (char)('0' + (n % 10)); nb[2] = 0;
+            con_puts("-> disconnected ");
+            con_puts(n < 10 ? nb + 1 : nb);
+            con_puts(" driver(s)\r\n");
+        }
+        return;
+    }
     /* 输入诊断：把每个键的扫描码和字符原样打出来。
      * 接驱动的时候「到底收到了什么」比「界面对不对」有用得多。 */
     if (!t_stricmp(cmd, "KEYS")) {

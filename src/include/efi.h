@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS — 最小 UEFI 定义
  * 按 UEFI 2.10 规范手写。所有结构体字段顺序严格照规范，中间字段一个都不能删，
  * 因为函数指针的"偏移"就是 ABI 本体。删一个字段 = 整个结构体错位。
@@ -223,6 +223,45 @@ typedef EFI_STATUS (*EFI_EXIT)(EFI_HANDLE, EFI_STATUS, UINTN, CHAR16 *);
 typedef EFI_STATUS (*EFI_STALL)(UINTN);
 typedef EFI_STATUS (*EFI_UNLOAD_IMAGE)(EFI_HANDLE);
 
+/* 从 EDK2 抄的类型 —— 原来这两个字段是 VOID *，用不了。
+ * 搜索类型：AllHandles=0, ByRegisterNotify=1, **ByProtocol=2** */
+typedef EFI_STATUS (*EFI_LOCATE_HANDLE_BUFFER)(UINT32 SearchType, EFI_GUID *Protocol,
+                                              VOID *SearchKey, UINTN *NoHandles,
+                                              EFI_HANDLE **Buffer);
+typedef EFI_STATUS (*EFI_DISCONNECT_CONTROLLER)(EFI_HANDLE Controller,
+                                               EFI_HANDLE DriverImage,
+                                               EFI_HANDLE Child);
+
+/* ------------------------------------------------ PCI I/O 协议（只定义前缀）
+ *
+ * 我们只用 GetLocation 一个函数，所以定义到它为止。
+ *
+ * **函数指针的偏移就是 ABI**，字段顺序不能动。取自
+ * E:\edk2-edk2-stable202602\MdePkg\Include\Protocol\PciIo.h 的原文：
+ *
+ *   PollMem 0x00  PollIo 0x08  Mem 0x10  Io 0x20  Pci 0x30
+ *   CopyMem 0x40  Map 0x48  Unmap 0x50
+ *   AllocateBuffer 0x58  FreeBuffer 0x60  Flush 0x68
+ *   **GetLocation 0x70**  Attributes 0x78  GetBarAttributes 0x80 ...
+ *
+ * （第一版我按印象写成 0x80 —— 那样拿到的会是 Attributes，
+ *   调用必崩。**这正是"照印象推"会出事的地方。**） */
+typedef struct _EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+struct _EFI_PCI_IO_PROTOCOL {
+    VOID *PollMem;                                 /* 0x00 */
+    VOID *PollIo;                                  /* 0x08 */
+    VOID *Mem[2];                                  /* 0x10  ACCESS = 两个函数指针 */
+    VOID *Io[2];                                   /* 0x20 */
+    VOID *Pci[2];                                  /* 0x30 */
+    VOID *CopyMem;                                 /* 0x40 */
+    VOID *Map;                                     /* 0x48 */
+    VOID *Unmap;                                   /* 0x50 */
+    VOID *AllocateBuffer;                          /* 0x58 */
+    VOID *FreeBuffer;                              /* 0x60 */
+    VOID *Flush;                                   /* 0x68 */
+    EFI_STATUS (*GetLocation)(EFI_PCI_IO_PROTOCOL *, UINTN *, UINTN *, UINTN *, UINTN *); /* 0x70 */
+};
+
 typedef struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;                                    /*   0..24 */
     VOID *RaiseTPL;                                          /*  24 */
@@ -256,12 +295,12 @@ typedef struct EFI_BOOT_SERVICES {
     EFI_STALL Stall;                                         /* 248 */
     VOID *SetWatchdogTimer;                                  /* 256 */
     VOID *ConnectController;                                 /* 264 */
-    VOID *DisconnectController;                              /* 272 */
+    EFI_DISCONNECT_CONTROLLER DisconnectController;          /* 272 */
     VOID *OpenProtocol;                                      /* 280 */
     VOID *CloseProtocol;                                     /* 288 */
     VOID *OpenProtocolInformation;                           /* 296 */
     VOID *ProtocolsPerHandle;                                /* 304 */
-    VOID *LocateHandleBuffer;                                /* 312 */
+    EFI_LOCATE_HANDLE_BUFFER LocateHandleBuffer;             /* 312 */
     EFI_LOCATE_PROTOCOL LocateProtocol;                      /* 320 */
 } EFI_BOOT_SERVICES;
 
@@ -317,6 +356,7 @@ extern const EFI_GUID gEfiSimpleFileSystemProtocolGuid;
 extern const EFI_GUID gEfiSerialIoProtocolGuid;
 extern const EFI_GUID gEfiGraphicsOutputProtocolGuid;
 extern const EFI_GUID gEfiFileInfoGuid;
+extern const EFI_GUID gEfiPciIoProtocolGuid;   /* v2.6：tnd_pci_own 用 */
 
 
 /* ============================ GOP（图形输出）================================
