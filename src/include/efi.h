@@ -228,6 +228,7 @@ typedef EFI_STATUS (*EFI_UNLOAD_IMAGE)(EFI_HANDLE);
 typedef EFI_STATUS (*EFI_LOCATE_HANDLE_BUFFER)(UINT32 SearchType, EFI_GUID *Protocol,
                                               VOID *SearchKey, UINTN *NoHandles,
                                               EFI_HANDLE **Buffer);
+typedef EFI_STATUS (*EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE ImageHandle, UINTN MapKey);
 typedef EFI_STATUS (*EFI_DISCONNECT_CONTROLLER)(EFI_HANDLE Controller,
                                                EFI_HANDLE DriverImage,
                                                EFI_HANDLE Child);
@@ -290,7 +291,7 @@ typedef struct EFI_BOOT_SERVICES {
     EFI_START_IMAGE StartImage;                              /* 208 */
     EFI_EXIT        Exit;                                    /* 216 */
     EFI_UNLOAD_IMAGE UnloadImage;                            /* 224 */
-    VOID *ExitBootServices;                                  /* 232 */
+    EFI_EXIT_BOOT_SERVICES ExitBootServices;                 /* 232 */
     VOID *GetNextMonotonicCount;                             /* 240 */
     EFI_STALL Stall;                                         /* 248 */
     VOID *SetWatchdogTimer;                                  /* 256 */

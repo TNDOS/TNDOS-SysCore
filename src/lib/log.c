@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- 输出层
  *   log_* : 只走串口，带 [log] 前缀 —— 给机器看的，用来做构建验证
  *   con_* : **路由到控制台服务层**（见 tnd.h 的 TND_CONSOLE）
@@ -102,6 +102,10 @@ const char *con_current(void) { return gCon ? gCon->Name : "(none)"; }
 
 static const TND_INPUT *gIn = 0;
 
+/* **Boot Services 是否已经交还。** 定义在这里是因为 log.c 两个构建里都有，
+ * 而内核和启动器都要能拿到它。见 tnd.h 的声明。 */
+int gBsGone = 0;
+
 void in_register(const TND_INPUT *in) {
     if (!in) return;
     gIn = in;
@@ -121,15 +125,28 @@ const char *in_current(void) {
  * 非 0 = (扫描码 << 16) | UnicodeChar —— 和固件 EFI_INPUT_KEY 的拼法一致，
  * 上层就不用分「后端给的」和「固件给的」两种情况。 */
 int in_pollkey(void) {
+    /* **取键走哪条路，取决于 Boot Services 还在不在。这不是随便挑的。**
+     *
+     * 退出之前用**固件的 ConIn**：固件的键盘驱动会把一整串按键缓冲起来，
+     * 我们一次一个地取。而直接轮询 8042 只拿得到最后一个 ——
+     * ps2.c 里记着实测（敲 "keys" 只到 s，敲 "vol" 只到 l）。
+     *
+     * 退出之后固件的驱动全部下线，8042 才真正归我们，**这时候后端才是对的**。
+     * 这也正是 ps2.c 里那句「要真接管，得先让固件别再碰键盘」的实现。 */
+    if (!gBsGone) {
+        if (gEnv.ST && gEnv.ST->ConIn) {
+            EFI_INPUT_KEY k;
+            if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k)))
+                return (int)(((UINT32)k.ScanCode << 16) | (UINT32)k.UnicodeChar);
+        }
+        return 0;
+    }
+
+    /* 退出之后：只用驱动后端。**没有后端就什么都收不到**，
+     * 但绝不去碰已经不存在的 ConIn。 */
     if (gIn && gIn->GetKey) {
         int k = gIn->GetKey();
         return k ? k : 0;
-    }
-    /* 没有后端就退回固件 —— **这正是我们要最终摆脱的那条路** */
-    if (gEnv.ST && gEnv.ST->ConIn) {
-        EFI_INPUT_KEY k;
-        if (!EFI_ERROR(gEnv.ST->ConIn->ReadKeyStroke(gEnv.ST->ConIn, &k)))
-            return (int)(((UINT32)k.ScanCode << 16) | (UINT32)k.UnicodeChar);
     }
     return 0;
 }
@@ -139,7 +156,17 @@ int in_getkey(void) {
     for (;;) {
         int k = in_pollkey();
         if (k) return k;
-        gEnv.BS->Stall(10000);   /* 10ms —— 和 API 那边原来的节奏一致 */
+        /* **这里不能叫 t_delay_us。**
+         * log.c 同时被内核和初始化器（BOOTX64.EFI）链接，而时基模块
+         * （time.c）依赖 conf.c 的 env_get —— 那只有内核里有。
+         * 所以就地判断：固件还在就用它的 Stall（准确），不在了就空转
+         * （粗糙但不崩）。内核那边的 shell 有自己的、校过频的 t_delay_us。 */
+        if (!gBsGone && gEnv.BS && gEnv.BS->Stall) {
+            gEnv.BS->Stall(10000);          /* 10ms */
+        } else {
+            volatile UINT64 n = 200000;
+            while (n--) { }
+        }
     }
 }
 

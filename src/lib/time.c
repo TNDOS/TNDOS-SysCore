@@ -28,6 +28,34 @@ static UINT64 rdtsc_now(void) { return 0; }      /* 别的架构接上时在这�
 
 int t_time_on(void) { return gOn; }
 
+/* ------------------------------------------------------------------ 延时
+ *
+ * **这个函数的意义在于它不调用固件。** ExitBootServices 之后 BS->Stall
+ * 就没了，而等待循环（取键、shell 的节奏）到处都在用。
+ *
+ * 用已经校准好的 TSC 空转。**校频本身要一次 Stall，那必须发生在退出之前** ——
+ * boot_exit() 会先调一次 t_time_init() 把这件事做掉。
+ *
+ * 没有时基（TSC 没读出来 / 被 TNDDOS_TIMER=OFF 关掉）时退回纯空转：
+ * 粗糙，但**绝不去碰已经不存在的固件服务**。 */
+void t_delay_us(UINT64 us) {
+    if (!gInitTried) t_time_init();
+
+    if (!gOn || !gTscPerMs) {
+        volatile UINT64 n = us * 200u;      /* 经验值：够慢就行，宁可久一点 */
+        while (n--) { }
+        return;
+    }
+
+    {
+        UINT64 span = (gTscPerMs * us) / 1000u;
+        UINT64 a;
+        if (!span) span = 1;
+        a = rdtsc_now();
+        while (rdtsc_now() - a < span) { }
+    }
+}
+
 UINT64 t_time_ms(void) {
     if (!gInitTried) t_time_init();          /* 懒初始化：省掉模块初始化顺序的麻烦 */
     if (!gOn || !gTscPerMs) return 0;

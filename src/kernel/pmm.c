@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- physical memory manager
  *
  * Take the UEFI memory map, build a bitmap covering all physical pages (1 = used),
@@ -185,7 +185,11 @@ UINT64 pmm_alloc_pages(UINTN count) {
 
         EFI_PHYSICAL_ADDRESS want = (EFI_PHYSICAL_ADDRESS)(idx << PMM_PAGE_SHIFT);
         EFI_PHYSICAL_ADDRESS got = want;
-        EFI_STATUS s = gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, count, &got);
+        /* **ExitBootServices 之后 AllocatePages 就不存在了。**
+         * 那时候位图是唯一的真相，直接从它发出去。
+         * 退出前必须问固件 —— 位图以为是空闲的页，固件可能自己占着。 */
+        EFI_STATUS s = gBsGone ? EFI_SUCCESS
+                               : gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, count, &got);
 
         /* Mark used whether or not it succeeded: a failure means the firmware
          * does not own up to this range (bitmap thought it was free but someone
@@ -211,7 +215,7 @@ UINT64 pmm_alloc_page(void) { return pmm_alloc_pages(1); }
 void pmm_free_pages(UINT64 addr, UINTN count) {
     if (!gReady || !addr || !count) return;
     UINT64 idx = addr >> PMM_PAGE_SHIFT;
-    gEnv.BS->FreePages((EFI_PHYSICAL_ADDRESS)addr, count);
+    if (!gBsGone) gEnv.BS->FreePages((EFI_PHYSICAL_ADDRESS)addr, count);
     for (UINTN k = 0; k < count; k++) {
         UINT64 pg = idx + k;
         if (pg < gTotalPages && pg >= gReserveLowPages && BIT_GET(pg)) {
@@ -230,7 +234,8 @@ void pmm_reserve(UINT64 base, UINTN pages) {
     if (!gReady) return;
     {
         EFI_PHYSICAL_ADDRESS at = (EFI_PHYSICAL_ADDRESS)base;
-        EFI_STATUS s = gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, pages, &at);
+        EFI_STATUS s = gBsGone ? EFI_SUCCESS
+                               : gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, pages, &at);
         if (EFI_ERROR(s) || at != (EFI_PHYSICAL_ADDRESS)base) {
             log_puts("[log] pmm: reserve "); log_hex(base);
             log_puts(" via AllocatePages failed, bitmap only\r\n");

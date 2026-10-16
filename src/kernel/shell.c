@@ -366,6 +366,40 @@ void shell_exec_line(char *line) {
      * 用法：OWN 0:3.0      bus:dev.fun
      * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
      * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
+    /* ==================================================================
+     * **EXITBOOT —— 内置指令：调用 ExitBootServices。**
+     *
+     * 不可逆。动手之前先把「退出之后什么还能用」摆清楚 ——
+     * 上真机之前该看到的正是这张单子，而不是退出之后才发现键盘没了。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "EXITBOOT")) {
+        con_puts("\r\n  [EXITBOOT] ExitBootServices -- IRREVERSIBLE\r\n");
+        con_puts("  ---- console backends (* = active right now) ----\r\n");
+        con_report();
+        con_puts("  ---- what still works afterwards ----\r\n");
+        con_puts("    console : fb backend (writes the framebuffer directly)   OK\r\n");
+        con_puts("    input   : ");
+        con_puts(in_ready() ? in_current() : "** NONE -- firmware ConIn only, dies **");
+        con_puts("\r\n    timer   : ");
+        con_puts(t_time_on() ? "TSC calibrated (delays use it)" : "** not calibrated, delays spin **");
+        con_puts("\r\n    memory  : PMM hands out pages from its own bitmap\r\n");
+        con_puts("  ---- what stops working ----\r\n");
+        con_puts("    file system           (goes through the firmware SFS)\r\n");
+        con_puts("    loading more drivers  (LoadImage)\r\n");
+        con_puts("    pool allocation       (DIR / FIND / anything with AllocatePool)\r\n");
+        con_puts("\r\n  calling it now...\r\n");
+        if (boot_exit() == 0) {
+            con_puts("\r\n  ================================================\r\n");
+            con_puts("   ** BOOT SERVICES ARE GONE **\r\n");
+            con_puts("   the firmware no longer owns this machine.\r\n");
+            con_puts("  ================================================\r\n");
+            con_puts("  VER and CLS still work; KEYS shows the input path.\r\n\r\n");
+        } else {
+            con_puts("\r\n  ** exit FAILED -- boot services are still alive **\r\n\r\n");
+        }
+        return;
+    }
+
     if (!t_stricmp(cmd, "OWN")) {
         int v[3] = { 0, 0, 0 };
         int k = 0;
@@ -411,7 +445,7 @@ void shell_exec_line(char *line) {
         con_puts("\r\n  dumping raw keys for ~5s, ESC to stop\r\n  ");
         for (int i = 0; i < 500; i++) {
             int k = in_pollkey();
-            if (!k) { gEnv.BS->Stall(10000); continue; }
+            if (!k) { t_delay_us(10000); continue; }
             con_puts("[");
             con_u64((UINT64)((k >> 16) & 0xFFFF));
             con_puts(":'");
@@ -577,7 +611,7 @@ static void read_line(char *line, UINTN cap) {
          * 这里是行编辑的节奏点，所以用非阻塞的那个，自己 Stall。 */
         {
             int key = in_pollkey();
-            if (!key) { gEnv.BS->Stall(20000); continue; }
+            if (!key) { t_delay_us(20000); continue; }
             k.ScanCode    = (UINT16)((key >> 16) & 0xFFFF);
             k.UnicodeChar = (UINT16)(key & 0xFFFF);
         }

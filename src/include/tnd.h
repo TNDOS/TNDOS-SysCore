@@ -72,6 +72,12 @@ typedef struct {
     int (*init)(void);          /* 返回 0 = 失败，非 0 = 成功 */
 } TND_MODULE_DEF;
 
+/* **Boot Services 已经交还给固件了吗。**
+ * ExitBootServices 之后它是 1 —— 所有走固件的路（ConIn / Stall / SFS /
+ * LoadImage / AllocatePool）都不再可用。凡是运行时会分支的地方都看它。 */
+extern int gBsGone;
+int  boot_exit(void);            /* 0 = 成功 */
+
 extern const TND_MODULE_DEF gModTrap;   /* 最前：异常处理得先装好 */
 extern const TND_MODULE_DEF gModVfs;
 extern const TND_MODULE_DEF gModPmm;
@@ -255,6 +261,11 @@ typedef struct {
     void   (*Fill)(UINTN x, UINTN y, UINTN w, UINTN h, UINTN ch, UINTN attr);
     void   (*Scroll)(UINTN x, UINTN y, UINTN w, UINTN h, int dy, UINTN ch, UINTN attr);
 } TND_CONSOLE;
+
+/* ---------------------------------------------------------- 时基 / 延时
+ * t_delay_us 用的是**已校准的 TSC**，不碰任何固件服务 ——
+ * ExitBootServices 之后 BS->Stall 就没有了，而等待循环还到处都在用。 */
+void        t_delay_us(UINT64 us);
 
 void        con_register(const TND_CONSOLE *c);
 
