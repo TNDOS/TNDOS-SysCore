@@ -367,6 +367,59 @@ void shell_exec_line(char *line) {
      * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
      * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
     /* ==================================================================
+     * **FBWC —— 给帧缓冲开 write-combining（MTRR）。**
+     *
+     * 真机上刷屏慢的解法。真机帧缓冲是 UC（非缓存）内存，每个像素写都是
+     * 一次独立总线事务；2K 屏下一次滚动要写 14.7 MB 的非缓存数据。
+     *
+     * 这里是**显式命令，开机不做** —— MTRR 范围设错会把普通内存变成 WC，
+     * 那是数据损坏级的后果。fb_set_wc 里有三道闸，任何一道不过就拒绝。
+     * MTRR 掉电即复位，试错了重启就回来。
+     *
+     * 自测用 TSC 增量做**前后对比**，所以不需要知道 CPU 频率。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "FBWC")) {
+        static const char *why[] = {
+            "no framebuffer info", "CPU does not support WC", "no variable MTRRs",
+            "range too small", "range not power-of-two aligned (REFUSED)",
+            "** range contains normal RAM -- REFUSED **", "no free MTRR slot"
+        };
+        UINT64 before, after;
+        int on = t_stricmp(arg, "OFF") ? 1 : 0;
+        int rc;
+
+        /* **先量、再清、最后才打结论。**
+         * 上一版把 con_clear() 放在最后 —— 结论连同证据被自己擦掉了，
+         * 截图上只剩一个提示符，什么都证明不了。测试设计错了。 */
+        before = fb_bench();
+        rc     = fb_set_wc(on);
+        after  = fb_bench();
+
+        con_clear();
+
+        con_puts("  [FBWC] framebuffer write-combining via MTRR\r\n\r\n");
+        con_puts("  4 MB sequential write into the framebuffer, TSC ticks:\r\n");
+        con_puts("    before : "); con_u64(before); con_puts("\r\n");
+        con_puts("    after  : "); con_u64(after);  con_puts("\r\n");
+        if (before && after) {
+            con_puts("    ratio  : "); con_u64(before / (after ? after : 1));
+            con_puts("x faster\r\n");
+        }
+        con_puts("\r\n  MTRR   : ");
+        if (rc) {
+            int idx = -rc - 1;
+            con_puts("refused -- ");
+            if (idx >= 0 && idx < (int)(sizeof(why)/sizeof(why[0]))) con_puts(why[idx]);
+            else con_puts("unknown");
+        } else {
+            con_puts(on ? "framebuffer is now write-combining"
+                        : "write-combining turned off");
+        }
+        con_puts("\r\n\r\n");
+        return;
+    }
+
+    /* ==================================================================
      * **EXITBOOT —— 内置指令：调用 ExitBootServices。**
      *
      * 不可逆。动手之前先把「退出之后什么还能用」摆清楚 ——

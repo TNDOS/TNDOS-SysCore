@@ -42,6 +42,8 @@ static struct {
     UINT32  *fb;
     UINTN    stride;        /* 每扫描行像素数 */
     UINTN    width, height; /* 像素 */
+    UINT64   fbPhys;        /* 帧缓冲的物理基址（没有分页，等于虚拟地址） */
+    UINT64   fbSize;        /* 帧缓冲字节数，来自 GOP 的 FrameBufferSize */
     UINTN    cellW, cellH;  /* 缩放后的格子像素尺寸 */
     int      scalePct;      /* 0 = 自动 */
     UINTN    cols, rows;    /* 字符网格 */
@@ -283,6 +285,8 @@ static int fb_init(void) {
     }
 
     gFb.fb      = (UINT32 *)(UINTN)gop->Mode->FrameBufferBase;
+    gFb.fbPhys  = (UINT64)gop->Mode->FrameBufferBase;
+    gFb.fbSize  = (UINT64)gop->Mode->FrameBufferSize;   /* MTRR 要用它定范围 */
     gFb.stride  = info->PixelsPerScanLine;
     gFb.width   = info->HorizontalResolution;
     gFb.height  = info->VerticalResolution;
@@ -544,6 +548,33 @@ static void fb_setattr(UINTN a) { gFb.attr = a & 0xFF; }
 static void fb_cursor(int v)    { gFb.cursorOn = v ? 1 : 0; fb_draw_cursor(gFb.cursorOn); }
 static UINTN fb_cols(void)      { return gFb.cols ? gFb.cols : 80; }
 static UINTN fb_rows(void)      { return gFb.rows ? gFb.rows : 25; }
+
+/* ------------------------------------------------------------------ 帧缓冲信息
+ *
+ * 把物理基址和字节数给内核用（MTRR 那部分在 src/kernel/fbwc.c ——
+ * 它要用 pmm 的位图做安全检查，而 pmm 只在内核构建里）。
+ * 这两个字段存在这里是因为只有 fb_init 拿得到 GOP。 */
+int fb_info(UINT64 *phys, UINT64 *size) {
+    if (!gFb.ok || !gFb.fbSize) return 0;
+    if (phys) *phys = gFb.fbPhys;
+    if (size) *size = gFb.fbSize;
+    return 1;
+}
+
+/* 在帧缓冲里顺序写 4 MB，返回 TSC 增量。
+ * **只看前后对比** —— 所以不需要知道 TSC 频率是多少。 */
+UINT64 fb_bench(void) {
+    UINT64 a, b, n, i;
+    if (!gFb.ok) return 0;
+    n = (4ull << 20) / 4;
+    if (n > (UINT64)gFb.stride * gFb.height) n = (UINT64)gFb.stride * gFb.height;
+    __asm__ __volatile__("mfence" ::: "memory");
+    a = __builtin_ia32_rdtsc();
+    for (i = 0; i < n; i++) gFb.fb[i] = 0x00112233u;
+    __asm__ __volatile__("mfence" ::: "memory");
+    b = __builtin_ia32_rdtsc();
+    return b - a;
+}
 
 const TND_CONSOLE gConFb = {
     "fb", fb_init, fb_write, fb_clear, fb_gotoxy, fb_getxy,

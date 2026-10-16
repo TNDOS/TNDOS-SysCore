@@ -230,6 +230,17 @@ void pmm_free_page(UINT64 addr) { pmm_free_pages(addr, 1); }
 /* 把一段物理区间永久占住：既标位图（PMM 自己不再发放），
  * 也真的向固件 AllocatePages（固件不再拿去另作他用）。
  * 固件拒绝也没关系 —— 位图那边已经标死了，我们不会重复发放。 */
+/* **这一页在我们位图里是"空闲"吗。**
+ *
+ * 给 fb_set_wc 做安全检查用：MTRR 只允许盖在 MMIO 上。
+ * 如果帧缓冲那个范围里有一页在位图里是空闲的，说明它是普通内存 ——
+ * 把它设成 write-combining 会造成数据损坏，必须拒绝。 */
+int pmm_page_is_free(UINT64 addr) {
+    UINT64 pg = addr >> PMM_PAGE_SHIFT;
+    if (!gReady || pg >= gTotalPages) return 0;      /* 位图覆盖不到 —— 当作不是普通内存 */
+    return BIT_GET(pg) ? 0 : 1;
+}
+
 void pmm_reserve(UINT64 base, UINTN pages) {
     if (!gReady) return;
     {

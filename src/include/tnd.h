@@ -354,6 +354,14 @@ typedef struct {
 int    pmm_init(void);
 void   pmm_stats(PMM_STATS *out);
 void   pmm_report(void);
+int    pmm_page_is_free(UINT64 addr);   /* 给帧缓冲 WC 做安全检查用 */
+
+/* 给帧缓冲那段内存开/关 write-combining（MTRR）。返回 0 成功。
+ * **默认不开**：MTRR 设错会把普通内存变成 WC，那是数据损坏。
+ * 所以调用前要过一道道检查，而且掉电即复位。 */
+int    fb_set_wc(int on);
+UINT64 fb_bench(void);                  /* 量一次帧缓冲顺序写（TSC 增量），只看前后对比 */
+int    fb_info(UINT64 *phys, UINT64 *size);   /* 帧缓冲物理基址 / 字节数；0 = 没有 */
 UINT64 pmm_alloc_page(void);
 UINT64 pmm_alloc_pages(UINTN count);
 void   pmm_free_page(UINT64 addr);
