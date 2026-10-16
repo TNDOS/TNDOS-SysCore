@@ -110,6 +110,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     gEnv.ImageHandle = ImageHandle;
     gEnv.ST = SystemTable;
     gEnv.BS = SystemTable->BootServices;
+    /* 内核也可能被固件**直接**启动（不走 BOOTX64.EFI），所以这里也要关一次。
+     * 关两次是无害的。 */
+    t_disable_watchdog();
     gEnv.RT = SystemTable->RuntimeServices;
     gEnv.Root = 0;
     gEnv.EspHandle = 0;

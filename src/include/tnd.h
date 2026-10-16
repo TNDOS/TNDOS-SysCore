@@ -266,6 +266,8 @@ typedef struct {
  * t_delay_us 用的是**已校准的 TSC**，不碰任何固件服务 ——
  * ExitBootServices 之后 BS->Stall 就没有了，而等待循环还到处都在用。 */
 void        t_delay_us(UINT64 us);
+/* 关掉固件的看门狗定时器。**开机第一件事就该做。** 见 util.c 的注释。 */
+void        t_disable_watchdog(void);
 
 void        con_register(const TND_CONSOLE *c);
 

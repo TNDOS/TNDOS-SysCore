@@ -41,7 +41,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     gEnv.Root = 0;
     gEnv.EspHandle = 0;
 
+    /* **第一件事：关掉固件的看门狗。**
+     * 它的倒数从开机就算起，不关的话机器会在任意时刻强制复位 ——
+     * 真机上看起来就是"自己关机"。见 util.c 里那段注释。 */
     log_init(SystemTable);
+    t_disable_watchdog();
 
     log_puts("[log] === BOOTX64.EFI entry ===\r\n");
     log_kv_u64("SystemTable.FirmwareRevision", SystemTable->FirmwareRevision);

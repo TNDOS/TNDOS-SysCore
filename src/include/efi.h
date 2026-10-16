@@ -229,6 +229,9 @@ typedef EFI_STATUS (*EFI_LOCATE_HANDLE_BUFFER)(UINT32 SearchType, EFI_GUID *Prot
                                               VOID *SearchKey, UINTN *NoHandles,
                                               EFI_HANDLE **Buffer);
 typedef EFI_STATUS (*EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE ImageHandle, UINTN MapKey);
+/* **Timeout = 0 就是关掉它。** 其余参数只有关掉时才允许全 0。 */
+typedef EFI_STATUS (*EFI_SET_WATCHDOG_TIMER)(UINTN Timeout, UINT64 WatchdogCode,
+                                             UINTN DataSize, CHAR16 *WatchdogData);
 typedef EFI_STATUS (*EFI_DISCONNECT_CONTROLLER)(EFI_HANDLE Controller,
                                                EFI_HANDLE DriverImage,
                                                EFI_HANDLE Child);
@@ -294,7 +297,7 @@ typedef struct EFI_BOOT_SERVICES {
     EFI_EXIT_BOOT_SERVICES ExitBootServices;                 /* 232 */
     VOID *GetNextMonotonicCount;                             /* 240 */
     EFI_STALL Stall;                                         /* 248 */
-    VOID *SetWatchdogTimer;                                  /* 256 */
+    EFI_SET_WATCHDOG_TIMER SetWatchdogTimer;                 /* 256 */
     VOID *ConnectController;                                 /* 264 */
     EFI_DISCONNECT_CONTROLLER DisconnectController;          /* 272 */
     VOID *OpenProtocol;                                      /* 280 */

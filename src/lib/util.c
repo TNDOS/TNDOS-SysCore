@@ -54,6 +54,34 @@ void t_strncpy(char *d, const char *s, UINTN cap) {
  *
  * 两边都对到 8 字节才走字循环：错位访问在 x86 上只是慢，在 LoongArch 那类
  * 架构上会直接抛对齐异常 —— 移植时这是个真坑，所以这里不做假设。 */
+/* ============================================================================
+ * 关掉固件的看门狗定时器
+ *
+ * **UEFI 固件在启动时给自己装了一个看门狗并开始倒数。**
+ * 引导程序如果不主动关它，时间一到**就强制复位**：
+ *
+ *   真机  -> 复位看起来像"自己关机"
+ *   QEMU  -> 复位就是自动重启
+ *
+ * 而这个倒数是**从开机就开始的**，和我们当时在做什么没有因果关系 ——
+ * 所以症状很迷惑：随便做点什么，机器突然就没了。我们就是被这个咬了：
+ * 屏幕上刚出现一行信息就断电，一直以为是驱动的问题。
+ *
+ * **标准做法就是开机第一件事关掉它**（SetWatchdogTimer(0,0,0,NULL)）。
+ * 之后要保活是操作系统自己的事 —— 那是我们以后想加再说的事，
+ * 但**绝不能留着固件那个**：它的语义、时长、重启行为都不是我们能控的。
+ * ==========================================================================*/
+void t_disable_watchdog(void) {
+    EFI_STATUS s;
+    if (!gEnv.BS || !gEnv.BS->SetWatchdogTimer) {
+        log_puts("[log] watchdog: no SetWatchdogTimer\r\n");
+        return;
+    }
+    s = gEnv.BS->SetWatchdogTimer(0, 0, 0, 0);
+    if (EFI_ERROR(s)) { log_puts("[log] watchdog: disable FAILED\r\n"); return; }
+    log_puts("[log] watchdog: disabled\r\n");
+}
+
 void t_memzero(void *d, UINTN n) {
     unsigned char *p = (unsigned char *)d;
     while (n && ((UINTN)p & 7)) { *p++ = 0; n--; }
