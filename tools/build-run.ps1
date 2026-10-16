@@ -260,6 +260,42 @@ if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 & (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
 
 # ---------------------------------------------------------------------------
+# **TNX 驱动：和旧的 .EFI 驱动放同一个文件夹**
+#
+# 驱动的源码分在两个仓库（本仓库的 srcdrv 是旧的 .EFI 模型，
+# TNDOS-SDKdrivers 是 SP3 的 TNX 模型），但**装到 ESP 上只有一个文件夹** ——
+# 内核的 DEVICE= 只认 \EFI\TNDOS\DRIVERS\ 这一个位置（drv.c:256）。
+#
+# 这里只把 TNX 驱动**构建进镜像**，**不写进 efidos.sys / config.sys**：
+# 现在这几个驱动还带着自测代码（PS2 有个 10 秒鼠标测试、USB 会等着收一个键），
+# 自动加载会把启动拖住甚至卡死。等自测摘掉、它们变成"安静的后台驱动"再说。
+#
+# 构建本身复用 SDK 的 build-tnx.ps1 —— 那套编译/链接/打包参数已经验证过很多次，
+# 不在这里重抄一遍（抄一遍就是两处会漂移的地方）。
+# ---------------------------------------------------------------------------
+$SdkTnx = Join-Path $SDK 'tools\build-tnx.ps1'
+if (Test-Path $SdkTnx) {
+    foreach ($d in 'ps2','vga','ahci','usb','nvme') {
+        $src = Join-Path $SDK ("drivers\" + $d + "\" + $d + ".c")
+        if (-not (Test-Path $src)) { Write-Host ("  [tnx] " + $d + ": no source, skipped"); continue }
+        $out = Join-Path $DrvDir ($d.ToUpper() + '.TNX')
+        & $SdkTnx -Source $src -Out $out -ImageBase 0x2000000 -Quiet 2>&1 | Out-Null
+        if (Test-Path $out) {
+            Write-Host ("  [tnx] " + $d.ToUpper() + ".TNX   -> \EFI\TNDOS\DRIVERS\  (" + (Get-Item $out).Length + " bytes)")
+        } else {
+            Write-Host ("  [tnx] " + $d.ToUpper() + ".TNX   ** FAILED **")
+        }
+    }
+    # build-tnx.ps1 会把中间产物放在输出目录旁边的 obj\ 下 ——
+    # 那是构建产物，**不能跟着驱动一起进 ESP 的 FAT 镜像**。
+    New-Item -ItemType Directory -Force -Path $TnxOut | Out-Null
+    $stray = Join-Path $DrvDir 'obj'
+    if (Test-Path $stray) { Remove-Item $stray -Recurse -Force }
+} else {
+    Write-Host ("  [tnx] drivers: no build-tnx.ps1 in the SDK -- skipped")
+}
+
+# ---------------------------------------------------------------------------
 # 外部命令（TNDOS-SysAPP）—— 工具是 TNX 程序，已经构建好了，这里只负责部署
 # ---------------------------------------------------------------------------
 $CMDS = Get-EnvPath 'TNDDOS_SYSAPP'
