@@ -476,7 +476,47 @@ void shell_exec_line(char *line) {
             con_puts("   ** BOOT SERVICES ARE GONE **\r\n");
             con_puts("   the firmware no longer owns this machine.\r\n");
             con_puts("  ================================================\r\n");
-            con_puts("  VER and CLS still work; KEYS shows the input path.\r\n\r\n");
+
+            /* ============================================================
+             * **退出之后自动做一次自检。**
+             *
+             * 理由很实在：退出之后每问一个问题都要人肉敲一遍命令，
+             * 而命令行本身现在只有 PS/2 那一条路。让 EXITBOOT 一次把
+             * 「块设备 / FAT / 根目录」三件事全打出来，人就只需要敲一个词。
+             *
+             * 顺序也刻意安排成从底层往上：先看有没有块设备（驱动），
+             * 再看挂不挂得上 FAT（文件系统），最后才列目录。哪一层断了，
+             * 上面那层就必然没输出 —— 一眼能看出断点在哪。
+             * ============================================================ */
+            con_puts("  ---- takeover self-check ----\r\n");
+            {
+                int i, n = blk_count();
+                con_puts("    block devices : ");
+                con_putc((char)('0' + (n > 9 ? 9 : n)));
+                for (i = 0; i < n; i++) {
+                    const TND_BLOCK *b = blk_at(i);
+                    con_puts(" ");
+                    con_puts(b && b->Name ? b->Name : "?");
+                }
+                con_puts("\r\n");
+
+                if (n <= 0) {
+                    con_puts("    ** no driver registered a block device **\r\n");
+                    con_puts("    check DEVICE=NVME.TNX / AHCI.TNX in efidos.sys,\r\n");
+                    con_puts("    and whether the driver's own banner appeared at boot.\r\n");
+                } else {
+                    if (!fat_ready())
+                        for (i = 0; i < n && !fat_ready(); i++) fat_mount(i);
+                    if (!fat_ready()) {
+                        con_puts("    fat           : ** not found on any of them **\r\n");
+                        con_puts("    the volume may be FAT32 (this reader is FAT16 only).\r\n");
+                    } else {
+                        con_puts("    fat           : mounted\r\n");
+                        fat_report();
+                    }
+                }
+            }
+            con_puts("\r\n  VER and CLS still work; KEYS shows the input path.\r\n\r\n");
         } else {
             con_puts("\r\n  ** exit FAILED -- boot services are still alive **\r\n\r\n");
         }

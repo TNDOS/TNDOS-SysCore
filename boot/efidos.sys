@@ -26,11 +26,13 @@ DEVICE=VGA.EFI
 ;   NVME.TNX   块设备。退出之后 dir / type / 跑程序都靠它读扇区。
 ;              它把自己注册成块设备，内核的 blk 层接住，fat 层再挂上去。
 ;
-; 换 SATA 的机器把 NVME 换成 AHCI.TNX；两个都写也行，认不出的那个会报
-; 绑定失败，不影响另一个。
+; **两个都写。** 认不出对应控制器的那一个会报绑定失败，不影响另一个 ——
+; 而少写一个的代价是：机器上那块盘根本不出现，症状只是"dir 列不出来"。
+; 实测踩过：真机只写了 NVME，而盘其实在 SATA 上，结果一个块设备都没有。
 ;
 DEVICE=PS2.TNX
 DEVICE=NVME.TNX
+DEVICE=AHCI.TNX
 SET TNDOS_SYSTEM=1
 SET TNDOS_ROOT=C:\TNDOS
 SET PATH=C:\;C:\TNDOS;C:\BIN

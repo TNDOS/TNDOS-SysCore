@@ -211,6 +211,21 @@ static void path_normalize(const char *in, char *out, UINTN cap) {
 }
 
 EFI_STATUS vfs_resolve(const char *dos, char *out, UINTN cap) {
+    /* **退出之后这里一律拒绝。**
+     *
+     * 路径解析要问固件（卷列表、当前目录都在 SFS 里）。退出之后那些代码
+     * 已经没了 —— 结果是跳进被回收的内存，屏幕上看到的是：
+     *
+     *   *** CPU EXCEPTION ***
+     *   vector : 13   general protection
+     *   RIP    : 0x0000000000001001        <- 不是地址，垃圾
+     *
+     * 实测就是这么崩的（在 cd efi\tndos 之后）。所以这里挡住，
+     * 让它变成一句"不支持"，而不是一次 #GP。
+     *
+     * dir 不受影响：它在上面就分岔到 blk+fat 那条路了。 */
+    if (gBsGone) return EFI_UNSUPPORTED;
+
     char base[TND_MAX_PATH];
     char letter = gCurDrive;
 
