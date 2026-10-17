@@ -163,16 +163,27 @@ int boot_exit(void) {
         log_puts("[log] boot_exit: try "); log_u64((UINT64)tries);
         log_puts(" -- getting the map, then calling ExitBootServices\r\n");
         gEnv.BS->GetMemoryMap(&sz, 0, &key, &descSize, &descVer);
-        log_puts("[log] boot_exit:   mapsize="); log_u64(sz);
-        log_puts(" descsize="); log_u64(descSize); log_puts("\r\n");
+        /* **屏幕标记，不是串口日志。**
+         *
+         * 串口那条路走固件的 SerialIo 协议，它**会分配内存**，于是 MapKey 失效。
+         * 而控制台（fb 后端）只往帧缓冲画像素，**不分配** —— 所以它既可以当
+         * 进度标记，又不会把要测的东西弄坏。
+         *
+         *   A = 取完大小   B = 池分配好了   C = 拿到最终 key
+         *   D = ExitBootServices 回来了
+         *
+         * 最后看到哪个字母，就知道死在它后面那一步。 */
+        con_puts("[boot_exit] A");
         sz += descSize * 2;                      /* 余量：两次调用之间会变大 */
         map = 0;
         if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, sz, &map)) || !map) {
-            log_puts("[log] boot_exit:   AllocatePool FAILED\r\n");
+            con_puts(" X(pool failed)");
             map = 0;
             break;
         }
+        con_puts(" B");
         st = gEnv.BS->GetMemoryMap(&sz, map, &key, &descSize, &descVer);
+        con_puts(" C");
         if (!EFI_ERROR(st)) {
             /* ============================================================
              * **这两句之间一个字节的输出都不能有。**
@@ -195,7 +206,7 @@ int boot_exit(void) {
              * each time" —— 那是诊断实验的写法（用来证明 key 是不是问题），
              * 不是在正式代码里该干的事。传一个错的 key 只会让失败更难查。 */
             st = gEnv.BS->ExitBootServices(gEnv.ImageHandle, key);
-            log_puts("[log] boot_exit:   EBS returned st="); log_u64(st); log_puts("\r\n");
+            con_puts(" D");
             if (!EFI_ERROR(st)) {
                 gBsGone = 1;
                 /* **把服务表换成桩。** 这一步必须在成功之后做 ——
