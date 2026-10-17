@@ -159,7 +159,9 @@ int boot_exit(void) {
     for (tries = 0; tries < 8; tries++) {
         UINTN sz = 0, key = 0;
 
-        log_puts("[log] boot_exit: try "); log_u64((UINT64)tries); log_puts("\r\n");
+        /* 日志必须在**取表之前**打完 —— 见下面 ExitBootServices 那一段的注释。 */
+        log_puts("[log] boot_exit: try "); log_u64((UINT64)tries);
+        log_puts(" -- getting the map, then calling ExitBootServices\r\n");
         gEnv.BS->GetMemoryMap(&sz, 0, &key, &descSize, &descVer);
         log_puts("[log] boot_exit:   mapsize="); log_u64(sz);
         log_puts(" descsize="); log_u64(descSize); log_puts("\r\n");
@@ -171,10 +173,27 @@ int boot_exit(void) {
             break;
         }
         st = gEnv.BS->GetMemoryMap(&sz, map, &key, &descSize, &descVer);
-        log_puts("[log] boot_exit:   getmap st="); log_u64(st);
-        log_puts(" key="); log_u64(key); log_puts("\r\n");
         if (!EFI_ERROR(st)) {
-            log_puts("[log] boot_exit:   calling ExitBootServices...\r\n");
+            /* ============================================================
+             * **这两句之间一个字节的输出都不能有。**
+             *
+             * EDK2 里 MapKey 是一个**每改一次内存图就自增的计数器**。而打印
+             * 会分配内存（固件的 SerialIo / ConOut 都走 AllocatePool），于是
+             * 刚取到的 key 立刻失效 —— ExitBootServices 拿到的是一个过期的值。
+             *
+             * 这一条是查资料查到的，不是猜的（LKML "UEFI EBS() failures on
+             * Lenovo T14s"）：
+             *   "I do get the feeling that efi_printk() contributes to the
+             *    memory map"
+             *
+             * 我们原来就在这里打了一句 "calling ExitBootServices..." ——
+             * 而且**每一轮重试都再打一句**，所以永远对不上，看上去就是卡死。
+             *
+             * 另外按那个帖子的提示：重试时把 key 递增一下，是个便宜的后手。
+             * ============================================================ */
+            /* **这里只能传 key。** 别学 LKML 帖子里那个 "increasing the map key
+             * each time" —— 那是诊断实验的写法（用来证明 key 是不是问题），
+             * 不是在正式代码里该干的事。传一个错的 key 只会让失败更难查。 */
             st = gEnv.BS->ExitBootServices(gEnv.ImageHandle, key);
             log_puts("[log] boot_exit:   EBS returned st="); log_u64(st); log_puts("\r\n");
             if (!EFI_ERROR(st)) {
