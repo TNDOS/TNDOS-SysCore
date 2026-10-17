@@ -259,6 +259,33 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     /* ---- 3) init kernel modules in order ---- */
     module_init_all();
 
+    /* ---- 3b) 帧缓冲开 write-combining ----
+     *
+     * **这一条一直存在，但从来没自动跑过。** 它原来只是 shell 里一条 FBWC
+     * 命令，而没人会在开机的第一时间想起去敲它 —— 于是整台机器都在用
+     * **未缓存的帧缓冲**，每次滚屏搬一整个屏（1280x800x4 = 4 MB，
+     * 2K 屏 14 MB），一个字一个字地走内存总线。用户的原话是"卡的要死"。
+     *
+     * 现在放在模块初始化之后、所有自检之前：PMM 已经能回答"这一页是普通
+     * 内存吗"（fb_set_wc 的安全检查要问它），而自检本身会打很多字，
+     * 正好也快起来。
+     *
+     * 返回 0 才是成功；-1..-7 是各种拒绝（不是 2 的幂、盖到普通内存、
+     * MTRR 槽用完了……）。失败不影响正确性，只是慢 —— 但要打出来，
+     * 否则"为什么这台机器特别慢"又变成猜。 */
+    {
+        int wc = fb_set_wc(1);
+        log_kv_u64("fb.wc", (UINT64)(wc == 0 ? 1 : 0));
+        con_puts("\r\n  -- Framebuffer --\r\n");
+        con_puts("  write-combining : ");
+        if (wc == 0) con_puts("ON  (scroll is fast now)\r\n");
+        else {
+            con_puts("** refused, code ");
+            con_u64((UINT64)(-wc));
+            con_puts(" ** -- scrolling will be slow; FBWC shows why\r\n");
+        }
+    }
+
     /* ---- 4) subsystem self-tests ---- */
     con_puts("\r\n  [Subsystem self-test]\r\n");
 

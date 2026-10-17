@@ -173,6 +173,39 @@ static void fb_draw_cursor(int on) {
     }
 }
 
+/* ============================================================================
+ * 非临时存储拷贝 —— **滚屏快的真正办法**
+ *
+ * 滚屏要搬整个帧缓冲（1280x800 是 4 MB，2K 屏 14 MB）。如果帧缓冲没开
+ * write-combining，每一次写都要单独走一趟内存总线，慢到"卡的要死"。
+ *
+ * 而 MTRR 在很多机器上拿不到槽位 —— QEMU 上实测 fb.wc = 0，真机上笔记本的
+ * MTRR 也常被固件占满。所以不能只靠它。
+ *
+ * movnti 是**不需要任何 MTRR 权限**的那条路：它是非临时存储，绕过 cache，
+ * 让 CPU 把写攒成整行突发再送出去。对这种"大块顺序写"正是它擅长的。
+ * 末尾的 sfence 是必须的 —— 非临时写是弱序的，不 fence 的话后面的
+ * 普通写可能先落地，屏幕上就会出现撕裂。
+ * ==========================================================================*/
+static void fb_copy_nt(UINT32 *dst, const UINT32 *src, UINTN bytes) {
+    UINTN   i, n = bytes / 8;
+    UINT64 *d = (UINT64 *)dst;
+    const UINT64 *s = (const UINT64 *)src;
+
+    for (i = 0; i < n; i++)
+        __asm__ __volatile__("movnti %1, %0" : "=m"(d[i]) : "r"(s[i]) : "memory");
+
+    {   /* 尾巴（帧缓冲宽度是 4 的倍数，正常走不到这里） */
+        UINTN tail = bytes & 7;
+        if (tail) {
+            UINT8 *db = (UINT8 *)dst + (bytes - tail);
+            const UINT8 *sb = (const UINT8 *)src + (bytes - tail);
+            for (i = 0; i < tail; i++) db[i] = sb[i];
+        }
+    }
+    __asm__ __volatile__("sfence" ::: "memory");
+}
+
 static void fb_scroll(void) {
     if (gFb.rows < 2) return;
     t_memcpy(gFb.shadow, gFb.shadow + gFb.cols, gFb.cols * (gFb.rows - 1) * sizeof(FB_CELL));
@@ -198,7 +231,9 @@ static void fb_scroll(void) {
         UINTN stride = gFb.stride;
         UINTN shift  = (UINTN)gFb.cellH * stride;
         UINTN keep   = (UINTN)(gFb.rows - 1) * gFb.cellH * stride;
-        if (keep) t_memcpy(gFb.fb, gFb.fb + shift, keep * sizeof(UINT32));
+        /* **这段是滚屏的热点。** 用非临时存储搬，别用普通 memcpy ——
+         * 普通拷贝在未开 write-combining 的帧缓冲上慢一个数量级。 */
+        if (keep) fb_copy_nt(gFb.fb, gFb.fb + shift, keep * sizeof(UINT32));
     }
     for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, gFb.rows - 1);
 }
