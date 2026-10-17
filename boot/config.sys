@@ -6,7 +6,11 @@
 ; ============================================================================
 
 REM Sample entries, edit as needed
-DEVICE=KBD.EFI
+
+; **KBD.EFI 不要了。** 它和 efidos.sys 里的 PS2.TNX 管的是同一个 8042：
+; 两个都去轮询，症状是「敲一串只有最后一个键到」（实测敲 keys 只到 s）。
+; PS2.TNX 是 TNX 形式、能活过 ExitBootServices，KBD.EFI 不能 —— 留它没意义。
+; DEVICE=KBD.EFI
 FILES=40
 SET TMP=C:\TMP
 SET TNDOS_USER=1

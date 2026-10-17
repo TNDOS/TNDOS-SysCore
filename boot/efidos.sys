@@ -14,6 +14,23 @@ FILES=30
 BUFFERS=20
 LASTDRIVE=Z
 DEVICE=VGA.EFI
+
+; ---- 硬件驱动（TNX 形式，不走固件 LoadImage）-------------------------------
+;
+; **这两条是 ExitBootServices 之后这台机器还能干活的前提**，缺一条都不行：
+;
+;   PS2.TNX    输入。退出之后键盘归我们 —— shell 还能读键。
+;              它的 8042 初始化是懒执行的：驱动加载时**不碰硬件**，
+;              第一次读键才初始化。提前碰会让固件在收尾时卡死。
+;
+;   NVME.TNX   块设备。退出之后 dir / type / 跑程序都靠它读扇区。
+;              它把自己注册成块设备，内核的 blk 层接住，fat 层再挂上去。
+;
+; 换 SATA 的机器把 NVME 换成 AHCI.TNX；两个都写也行，认不出的那个会报
+; 绑定失败，不影响另一个。
+;
+DEVICE=PS2.TNX
+DEVICE=NVME.TNX
 SET TNDOS_SYSTEM=1
 SET TNDOS_ROOT=C:\TNDOS
 SET PATH=C:\;C:\TNDOS;C:\BIN
