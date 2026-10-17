@@ -41,7 +41,42 @@ void log_init(EFI_SYSTEM_TABLE *st) {
     con_select("uefi");
 }
 
+/* ============================================================================
+ * 串口输出 —— **ExitBootServices 之后必须换路**
+ *
+ * 固件的 SerialIo 协议（gSer）在退出之后连代码带数据一起被回收，而那块内存
+ * 紧接着会被堆复用。于是下一次 log_puts 就跳进被复用的内存里：
+ *
+ *     [log] boot_exit:   calling ExitBootServices...     <- 之后什么都没有
+ *
+ * **看上去像"卡在 ExitBootServices"，其实是退出成功之后崩在写日志上。**
+ * 这也解释了为什么它取决于「之前在批处理里跑过什么」—— 跑过 TNX 就会分配
+ * 内存、把那块回收的代码覆盖掉；没跑过的话那份旧代码还在，还能侥幸工作。
+ * 我第一次试 exitboot 能成、后来就再没成过，就是这个原因。
+ *
+ * 所以退出之后直接写 16550 的数据端口（COM1 = 0x3F8）。那是硬件，不归固件管。 */
+static UINT8 ser_inb(UINT16 port) {
+    UINT8 v;
+    __asm__ __volatile__("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+static void ser_outb(UINT16 port, UINT8 v) {
+    __asm__ __volatile__("outb %0, %1" :: "a"(v), "Nd"(port));
+}
+
 static void ser_raw(const char *s) {
+    if (!s) return;
+
+    if (gBsGone) {
+        /* 直接写 COM1。先等发送保持寄存器空 —— 不等的话大段输出会丢字。 */
+        while (*s) {
+            int guard = 200000;
+            while (guard-- > 0 && !(ser_inb(0x3FD) & 0x20)) { }
+            ser_outb(0x3F8, (UINT8)*s++);
+        }
+        return;
+    }
+
     if (!gSer) return;
     while (*s) { UINTN n = 1; gSer->Write(gSer, &n, (void *)s); s++; }
 }
