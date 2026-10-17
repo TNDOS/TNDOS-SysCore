@@ -82,24 +82,116 @@ static int try_mount(int blk, UINT64 base) {
     return 1;
 }
 
-/* 在某个块设备上找 FAT16 卷。起点依次试：0 / 2048 / 63 / 1。 */
+/* ============================================================================
+ * 从分区表找 EFI System Partition 的起始 LBA
+ *
+ * **为什么不能靠猜。** 原来是 probe[] = {0, 2048, 63, 1} —— 顶上的注释里
+ * 自己也写着"发一个真实 GPT/MBR 分区表才行"。猜的后果很坏：
+ * QEMU 里那个 esp.img 恰好从 2048 开始，所以能挂上；真机上 ESP 的起点
+ * 是分区表说了算，猜不中就挂不上 —— 而症状只是"根目录列不出来"，
+ * 完全看不出是起点找错了。
+ *
+ * 顺序：GPT -> MBR -> 最后才退回探测（esp.img 那种裸文件系统用得上）。
+ * ==========================================================================*/
+static UINT32 rd32(const UINT8 *p) {
+    return (UINT32)p[0] | ((UINT32)p[1] << 8) | ((UINT32)p[2] << 16) | ((UINT32)p[3] << 24);
+}
+static UINT64 rd64(const UINT8 *p) {
+    return (UINT64)rd32(p) | ((UINT64)rd32(p + 4) << 32);
+}
+static int  eq16(const UINT8 *a, const UINT8 *b) {
+    for (int i = 0; i < 16; i++) if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+/* GPT 磁盘上 EFI System Partition 的类型 GUID（磁盘上的字节序）。 */
+static const UINT8 kEspGuid[16] = {
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B
+};
+
+static UINT64 find_esp_gpt(int blkIdx) {
+    static UINT8 hdr[512];
+    static UINT8 ents[512 * 8];
+    UINT64 entLba;
+    UINT32 n, entSize, total, sectors, i;
+
+    if (!blk_read(blkIdx, 1, 1, hdr)) return 0;
+    if (hdr[0] != 'E' || hdr[1] != 'F' || hdr[2] != 'I' || hdr[3] != ' ') return 0;
+    if (hdr[4] != 'P' || hdr[5] != 'A' || hdr[6] != 'R' || hdr[7] != 'T') return 0;
+
+    entLba  = rd64(hdr + 72);
+    n       = rd32(hdr + 80);
+    entSize = rd32(hdr + 84);
+    if (entSize < 128 || entSize > 512 || n == 0) return 0;
+    if (n > 128) n = 128;
+
+    total = n * entSize;
+    if (total > sizeof(ents)) total = sizeof(ents);
+    sectors = (total + 511) / 512;
+    if (!blk_read(blkIdx, entLba, sectors, ents)) return 0;
+
+    for (i = 0; i < n; i++) {
+        const UINT8 *e = ents + i * entSize;
+        if (!eq16(e, kEspGuid)) continue;
+        { UINT64 s = rd64(e + 32); if (s) return s; }
+    }
+    return 0;
+}
+
+/* MBR 上的 FAT / ESP 分区（老机器、U 盘）。 */
+static UINT64 find_fat_mbr(int blkIdx) {
+    static UINT8 mbr[512];
+    int i;
+    if (!blk_read(blkIdx, 0, 1, mbr)) return 0;
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) return 0;
+    for (i = 0; i < 4; i++) {
+        const UINT8 *e = mbr + 446 + i * 16;
+        UINT8 t = e[4];
+        UINT64 s;
+        if (t != 0xEF && t != 0x0C && t != 0x0B && t != 0x07) continue;
+        s = rd32(e + 8);
+        if (s) return s;
+    }
+    return 0;
+}
+
+static int mount_at(int blkIdx, UINT64 lba, const char *how) {
+    if (!try_mount(blkIdx, lba)) return 0;
+    gOk = 1;
+    log_puts("[log] fat: mounted on blk "); log_u64((UINT64)blkIdx);
+    log_puts(" at LBA "); log_u64(gV.base);
+    log_puts(" (via "); log_puts(how); log_puts(")");
+    log_puts("  clusters spc="); log_u64(gV.spc);
+    log_puts("\r\n");
+    return 1;
+}
+
+/* 在某个块设备上找 FAT16 卷。**先信分区表，最后才退回探测。** */
 int fat_mount(int blkIdx) {
     static const UINT64 probe[] = { 0, 2048, 63, 1 };
+    UINT64 start;
     int i;
 
     gOk = 0;
     if (!blk_at(blkIdx)) return 0;
 
-    for (i = 0; i < (int)(sizeof(probe) / sizeof(probe[0])); i++) {
-        if (!try_mount(blkIdx, probe[i])) continue;
-        gOk = 1;
-        log_puts("[log] fat: mounted on blk "); log_u64((UINT64)blkIdx);
-        log_puts(" at LBA "); log_u64(gV.base);
-        log_puts("  clusters spc="); log_u64(gV.spc);
-        log_puts("\r\n");
-        return 1;
+    start = find_esp_gpt(blkIdx);
+    if (start) {
+        log_puts("[log] fat: GPT says the ESP starts at LBA "); log_u64(start); log_puts("\r\n");
+        if (mount_at(blkIdx, start, "GPT")) return 1;
     }
-    log_puts("[log] fat: no FAT16 volume found\r\n");
+    start = find_fat_mbr(blkIdx);
+    if (start) {
+        log_puts("[log] fat: MBR says a FAT partition starts at LBA "); log_u64(start); log_puts("\r\n");
+        if (mount_at(blkIdx, start, "MBR")) return 1;
+    }
+
+    /* 退路：没有分区表的裸文件系统（esp.img 就是这种）。 */
+    for (i = 0; i < (int)(sizeof(probe) / sizeof(probe[0])); i++) {
+        if (mount_at(blkIdx, probe[i], "probe")) return 1;
+    }
+    log_puts("[log] fat: no FAT16 volume found (no GPT, no MBR, no probe hit)\r\n");
     return 0;
 }
 

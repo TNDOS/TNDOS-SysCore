@@ -344,12 +344,32 @@ int vfs_dir(const char *dos) {
      * ================================================================ */
     if (gBsGone) {
         int bi, bn = blk_count();
+
+        /* **先把块设备列出来。** 真机上"目录列不出来"可能有两个完全不同的原因：
+         *   一个设备都没注册  -> 驱动没接上（或者扇区大小被 blk 拒了）
+         *   有设备但挂不上    -> 文件系统起点/参数不对
+         * 不把这两件事分开，用户和我们都只能猜。 */
+        if (bn <= 0) {
+            con_puts("  no block device at all\r\n");
+            con_puts("  LOAD AHCI.TNX or NVME.TNX before EXITBOOT\r\n");
+            return 0;
+        }
+        {
+            const TND_BLOCK *b;
+            con_puts("  block devices: ");
+            for (bi = 0; bi < bn; bi++) {
+                b = blk_at(bi);
+                if (!b) continue;
+                con_puts(b->Name ? b->Name : "?");
+                con_puts(" ");
+            }
+            con_puts("\r\n");
+        }
+
         if (!fat_ready())
             for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
         if (!fat_ready()) {
-            con_puts("  no FAT volume on any block device\r\n");
-            if (!bn)
-                con_puts("  (no block device -- LOAD AHCI.TNX or NVME.TNX before EXITBOOT)\r\n");
+            con_puts("  no FAT volume found on any of them\r\n");
             return 0;
         }
         fat_report();
