@@ -205,6 +205,7 @@ TNDDOS 是个 DOS，不能拿一个写不进去的文件系统来测。所以 `r
 |[docs/TNX-SPEC.md](docs/TNX-SPEC.md)|**TNX 可执行格式规范**（v1.0 已冻结；v1.1 当前）|
 |[docs/TNX-DESIGN.md](docs/TNX-DESIGN.md)|TNX 的设计取舍、v1 边界与反目标|
 |[docs/TODO.md](docs/TODO.md)|已知问题、待办、后续路线|
+|[docs/REPOS.md](docs/REPOS.md)|**仓库联动契约**：四个仓库谁拥有什么、什么必须一致、怎么验（`tools\verify-repos.ps1`）|
 |[docs/SP3-PLAN.md](docs/SP3-PLAN.md)|**SP3 开发计划**：每个驱动走到第几步、剩下的活怎么排、防返工的规则|
 |[docs/ROADMAP.md](docs/ROADMAP.md)|版本路线图|
 |[CONTRIBUTING.md](CONTRIBUTING.md)|提交与代码规范|

@@ -32,6 +32,42 @@ static void show_chain(void) {
 }
 
 /* ============================================================================
+ * ExitBootServices 之后的 Boot Services 桩表
+ *
+ * 退出之后，固件的服务表**和它指向的代码**全都没了 —— 那块内存已经还给系统。
+ *
+ * 我们之前只是把 gBsGone 置上，却没管 gEnv.BS 还指着那块被回收的内存。
+ * 于是**任何一条漏掉的路径都会跳进去**：实测敲 DIR，
+ *
+ *     *** CPU EXCEPTION ***  vector 13  general protection
+ *     RIP : 0x0000000000001001
+ *
+ * —— 一个既不在内核也不在驱动窗口里的离谱地址。
+ *
+ * **知道会失败的东西，应该干净地失败，而不是炸掉。**
+ * 把整张表换成「什么都说 Unsupported」之后：
+ *
+ *   DIR / TYPE / FIND  -> VFS 报「找不到文件系统」，shell 继续活着
+ *   其它漏网路径        -> 拿到一个干净的失败返回值
+ *
+ * 一路可查，比只剩一行地址强得多。
+ * ==========================================================================*/
+static EFI_STATUS gBsStubFn(void) { return EFI_UNSUPPORTED; }
+static EFI_BOOT_SERVICES gStubBs;
+
+static void bs_install_stub(void) {
+    void **slot  = (void **)&gStubBs;
+    UINTN   n    = sizeof(gStubBs) / sizeof(void *);
+    /* Hdr 是 24 字节的数据（不是函数指针），前 3 个槽要跳过 */
+    UINTN   first = sizeof(EFI_TABLE_HEADER) / sizeof(void *);
+    UINTN   i;
+
+    for (i = 0; i < n; i++) slot[i] = 0;
+    for (i = first; i < n; i++) slot[i] = (void *)&gBsStubFn;
+    gEnv.BS = &gStubBs;
+}
+
+/* ============================================================================
  * ExitBootServices —— **不可逆的分界点**
  *
  * 成功之后固件的一切服务全部失效：ConIn / Stall / AllocatePool / 文件系统 /
@@ -91,6 +127,9 @@ int boot_exit(void) {
             st = gEnv.BS->ExitBootServices(gEnv.ImageHandle, key);
             if (!EFI_ERROR(st)) {
                 gBsGone = 1;
+                /* **把服务表换成桩。** 这一步必须在成功之后做 ——
+                 * 上面那个重试循环还要用真的 BS。见 bs_install_stub 的注释。 */
+                bs_install_stub();
                 return 0;
             }
         }
