@@ -55,7 +55,37 @@ static void show_chain(void) {
 static EFI_STATUS gBsStubFn(void) { return EFI_UNSUPPORTED; }
 static EFI_BOOT_SERVICES gStubBs;
 
-static void bs_install_stub(void) {
+/* ---------------------------------------------------------------- 能兑现的三格
+ *
+ * 桩表里大部分槽只能返回「不支持」—— 固件的代码真的没了，我们没法凭空造出
+ * 一个 LoadImage 或者一个 SimpleFileSystem。
+ *
+ * 但**有三格我们真的能兑现**，把它们换成自己的实现，退出之后所有调用点
+ * 自动转到我们这边，**一个调用点都不用改**：
+ *
+ *   AllocatePool  ->  kmalloc      （内核本来就有堆）
+ *   FreePool      ->  kfree
+ *   Stall         ->  t_delay_us   （已校准的 TSC）
+ *
+ * 这就是「写个模块在 exitboot 之后把空缺填上」：缺口不是靠改几十处代码补的，
+ * 是靠**在这张表上换几个函数指针**补的。剩下的真补不了的（LoadImage、
+ * LocateHandleBuffer、GetMemoryMap……）才如实返回不支持。
+ *
+ * 顺序也有意义：**这三格必须能兑现，否则内核自己就没法分配内存** ——
+ * 而文件系统、目录枚举全都要分配。它们一塌，后面全完。 */
+static EFI_STATUS EFIAPI bs_pool_alloc(UINT32 type, UINTN size, void **out) {
+    void *p;
+    (void)type;
+    if (!out) return EFI_UNSUPPORTED;
+    p = kmalloc(size ? (UINTN)size : 1);
+    if (!p) return EFI_UNSUPPORTED;
+    *out = p;
+    return 0;
+}
+static EFI_STATUS EFIAPI bs_pool_free(void *p) { if (p) kfree(p); return 0; }
+static EFI_STATUS EFIAPI bs_stall(UINTN us) { t_delay_us((UINT64)us); return 0; }
+
+static void bs_install_takeover(void) {
     void **slot  = (void **)&gStubBs;
     UINTN   n    = sizeof(gStubBs) / sizeof(void *);
     /* Hdr 是 24 字节的数据（不是函数指针），前 3 个槽要跳过 */
@@ -64,7 +94,15 @@ static void bs_install_stub(void) {
 
     for (i = 0; i < n; i++) slot[i] = 0;
     for (i = first; i < n; i++) slot[i] = (void *)&gBsStubFn;
+
+    /* **这三格我们真的能兑现** —— 换成真的。 */
+    gStubBs.AllocatePool = bs_pool_alloc;
+    gStubBs.FreePool     = bs_pool_free;
+    gStubBs.Stall        = bs_stall;
+
     gEnv.BS = &gStubBs;
+
+    log_puts("[log] takeover: AllocatePool/FreePool/Stall are ours now\r\n");
 }
 
 /* ============================================================================
@@ -102,34 +140,50 @@ int boot_exit(void) {
     if (gBsGone) return 0;
     if (!gEnv.BS || !gEnv.BS->ExitBootServices) return -1;
 
+    /* **每一步都记一行。** 这个函数卡住过一次，而里面一行日志都没有 ——
+     * 结果只能猜。加了这些之后，卡在哪一步是串口上直接看得到的。 */
+    log_puts("[log] boot_exit: begin\r\n");
+
     /* 1  显示控制台切到 fb 后端（它自己往帧缓冲写，不经过固件）。 */
     if (!con_select("fb")) {
         log_puts("[log] boot_exit: no fb console -- refusing to exit\r\n");
         return -1;
     }
+    log_puts("[log] boot_exit: console is ours (fb)\r\n");
 
     /* 2  时基必须在退出前校好。 */
     t_time_init();
+    log_puts("[log] boot_exit: timer ready\r\n");
 
     /* 3  循环重取 + 退出。 */
     for (tries = 0; tries < 8; tries++) {
         UINTN sz = 0, key = 0;
 
+        log_puts("[log] boot_exit: try "); log_u64((UINT64)tries); log_puts("\r\n");
         gEnv.BS->GetMemoryMap(&sz, 0, &key, &descSize, &descVer);
+        log_puts("[log] boot_exit:   mapsize="); log_u64(sz);
+        log_puts(" descsize="); log_u64(descSize); log_puts("\r\n");
         sz += descSize * 2;                      /* 余量：两次调用之间会变大 */
         map = 0;
         if (EFI_ERROR(gEnv.BS->AllocatePool(EfiLoaderData, sz, &map)) || !map) {
+            log_puts("[log] boot_exit:   AllocatePool FAILED\r\n");
             map = 0;
             break;
         }
         st = gEnv.BS->GetMemoryMap(&sz, map, &key, &descSize, &descVer);
+        log_puts("[log] boot_exit:   getmap st="); log_u64(st);
+        log_puts(" key="); log_u64(key); log_puts("\r\n");
         if (!EFI_ERROR(st)) {
+            log_puts("[log] boot_exit:   calling ExitBootServices...\r\n");
             st = gEnv.BS->ExitBootServices(gEnv.ImageHandle, key);
+            log_puts("[log] boot_exit:   EBS returned st="); log_u64(st); log_puts("\r\n");
             if (!EFI_ERROR(st)) {
                 gBsGone = 1;
                 /* **把服务表换成桩。** 这一步必须在成功之后做 ——
-                 * 上面那个重试循环还要用真的 BS。见 bs_install_stub 的注释。 */
-                bs_install_stub();
+                 * 上面那个重试循环还要用真的 BS。 */
+                log_puts("[log] boot_exit:   success -- installing takeover table\r\n");
+                bs_install_takeover();
+                log_puts("[log] boot_exit:   takeover table installed\r\n");
                 return 0;
             }
         }

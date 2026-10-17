@@ -31,6 +31,14 @@
 #define TNX_DRIVER_BASE  0x0000000002000000ULL   /* 32 MiB —— 驱动窗口，常驻 */
 #define TNX_WINDOW_SIZE  0x0000000000800000ULL   /*  8 MiB，每个窗口一样大 */
 
+/* **驱动窗口里一格的大小。** 8 MiB / 1 MiB = 8 个驱动槽。
+ *
+ * 2026-10 踩过：所有驱动都链到同一个基址 0x2000000，加载第二个就把第一个
+ * 整段覆盖了 —— 症状是「调用第一个驱动的回调时跳进一段函数序言」，
+ * 看不出和「加载了第二个驱动」有任何关系。所以每个驱动有自己的槽。 */
+#define TNX_DRIVER_SLOT_SIZE  0x0000000000100000ULL   /* 1 MiB */
+#define TNX_DRIVER_SLOTS      8
+
 /* 旧名字，等于程序窗口。大量代码还在用它。 */
 #define TNX_IMAGE_BASE   TNX_PROG_BASE
 

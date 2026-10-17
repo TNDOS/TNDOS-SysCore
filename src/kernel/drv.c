@@ -61,6 +61,28 @@ int drv_register(const TND_DRIVER_DESC *d) {
             return -5;
         }
     }
+    /* **一个槽只能住一个驱动。**
+     *
+     * 踩过的坑：所有驱动都链到同一个基址 0x2000000，加载第二个就把第一个
+     * 整段覆盖了。症状是「调用第一个驱动的回调时跳到一段函数序言上」
+     * （实测 RIP = 0x20ECD834**E5894855**，而 55 48 89 E5 正是 push rbp; mov rbp,rsp），
+     * 完全看不出和「加载了第二个驱动」有任何关系。
+     *
+     * 所以按槽查重：同一个 1 MiB 槽里已经有驱动，直接拒绝。 */
+    {
+        static UINT8 slotUsed[TNX_DRIVER_SLOTS];
+        UINT64 a    = (UINT64)(UINTN)d;
+        UINTN  slot = (UINTN)((a - TNX_DRIVER_BASE) / TNX_DRIVER_SLOT_SIZE);
+        if (slot < TNX_DRIVER_SLOTS) {
+            if (slotUsed[slot]) {
+                log_puts("[log] drv: DUPLICATE window slot "); log_u64((UINT64)slot);
+                log_puts(" -- refusing (base collision)\r\n");
+                return -6;
+            }
+            slotUsed[slot] = 1;
+        }
+    }
+
     if (d->StructSize < sizeof(TND_DRIVER_DESC)) {
         log_puts("[log] drv: descriptor too small (old driver header?)\r\n");
         return -2;

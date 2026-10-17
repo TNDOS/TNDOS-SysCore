@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * TNDDOS -- TNX 加载器
  *
  * 做四件事：读文件 -> 严格校验 -> 搬进固定映像窗口 -> 调入口。
@@ -195,8 +195,18 @@ static const char *mismatch_why(tnx_u8 m) {
 static const UINT64 kWindows[] = { TNX_PROG_BASE, TNX_DRIVER_BASE };
 #define TNX_WINDOW_COUNT ((int)(sizeof(kWindows) / sizeof(kWindows[0])))
 
+/* **基址不必等于窗口起点，必须落在某个窗口之内。**
+ *
+ * 原来这里是 base == kWindows[i] —— 那意味着**每个窗口只能放一个映像**，
+ * 而驱动窗口要同时放好几个驱动（块设备 + 输入，缺一不可）。
+ * 现在驱动窗口里按 TNX_DRIVER_SLOT_SIZE 分槽，基址必须在槽边界上。 */
 static int window_ok(UINT64 base) {
-    for (int i = 0; i < TNX_WINDOW_COUNT; i++) if (base == kWindows[i]) return 1;
+    for (int i = 0; i < TNX_WINDOW_COUNT; i++) {
+        if (base < kWindows[i] || base >= kWindows[i] + TNX_WINDOW_SIZE) continue;
+        if (kWindows[i] == TNX_DRIVER_BASE)
+            return ((base - kWindows[i]) % TNX_DRIVER_SLOT_SIZE) == 0;
+        return 1;
+    }
     return 0;
 }
 

@@ -277,16 +277,25 @@ if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 # ---------------------------------------------------------------------------
 $SdkTnx = Join-Path $SDK 'tools\build-tnx.ps1'
 if (Test-Path $SdkTnx) {
+    # **每个驱动一个独立基址。** 驱动里的地址是 link-time 绝对地址，
+    # 全链到 0x2000000 的话，加载第二个就把第一个整段覆盖掉 —— 而症状是
+    # 「调用第一个驱动的回调时跳进一段函数序言」，根本看不出是这个原因。
+    # 1 MiB 一个槽，8 个槽正好塞进现有的 8 MiB 驱动窗口（内核那边边界不用改）。
+    $slot = 0
     foreach ($d in 'ps2','vga','ahci','usb','nvme') {
         $src = Join-Path $SDK ("drivers\" + $d + "\" + $d + ".c")
         if (-not (Test-Path $src)) { Write-Host ("  [tnx] " + $d + ": no source, skipped"); continue }
-        $out = Join-Path $DrvDir ($d.ToUpper() + '.TNX')
-        & $SdkTnx -Source $src -Out $out -ImageBase 0x2000000 -Quiet 2>&1 | Out-Null
+        $out  = Join-Path $DrvDir ($d.ToUpper() + '.TNX')
+        $base = 0x2000000 + $slot * 0x100000
+        & $SdkTnx -Source $src -Out $out -ImageBase $base -Quiet 2>&1 | Out-Null
         if (Test-Path $out) {
-            Write-Host ("  [tnx] " + $d.ToUpper() + ".TNX   -> \EFI\TNDOS\DRIVERS\  (" + (Get-Item $out).Length + " bytes)")
+            Write-Host ("  [tnx] " + $d.ToUpper() + ".TNX   -> DRIVERS\  " +
+                        (Get-Item $out).Length + " bytes   base 0x" + $base.ToString("X7") +
+                        "   slot " + $slot)
         } else {
             Write-Host ("  [tnx] " + $d.ToUpper() + ".TNX   ** FAILED **")
         }
+        $slot++
     }
     # build-tnx.ps1 会把中间产物放在输出目录旁边的 obj\ 下 ——
     # 那是构建产物，**不能跟着驱动一起进 ESP 的 FAT 镜像**。

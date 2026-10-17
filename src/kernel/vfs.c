@@ -331,6 +331,31 @@ int vfs_dir(const char *dos) {
     int closedDir = 0;
     (void)dir;
 
+    /* ================================================================
+     * **ExitBootServices 之后走我们自己的 FAT。**
+     *
+     * 在这之前，DIR 走的是固件的 SimpleFileSystem，退出之后它连同整块代码
+     * 一起消失 —— 所以那时的 DIR 只能报错。
+     *
+     * 我们的 blk + fat 不需要任何固件服务（扇区是 TNX 驱动给的），
+     * 所以这条路在退出之后依然成立。**这就是"接手"的具体形状。**
+     *
+     * 现在只支持根目录 —— 子目录要沿簇链走，那是下一步。
+     * ================================================================ */
+    if (gBsGone) {
+        int bi, bn = blk_count();
+        if (!fat_ready())
+            for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        if (!fat_ready()) {
+            con_puts("  no FAT volume on any block device\r\n");
+            if (!bn)
+                con_puts("  (no block device -- LOAD AHCI.TNX or NVME.TNX before EXITBOOT)\r\n");
+            return 0;
+        }
+        fat_report();
+        return 0;
+    }
+
     if (!d) return 0;
     s = vfs_resolve(dos, path, sizeof(path));
     if (EFI_ERROR(s)) { con_puts("  invalid path\r\n"); return 0; }
