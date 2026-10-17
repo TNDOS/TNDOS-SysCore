@@ -444,6 +444,12 @@ static TND_ABI int api_pci_own(int bus, int dev, int fun) {
     return n;
 }
 
+/* ------------------------------------------------------- 块设备（v2.7）
+ * 驱动把「读扇区」交进来。实现全在 blk.c。 */
+static TND_ABI int api_blk_register(const TND_BLOCK *b) {
+    return blk_register(b);
+}
+
 /* ------------------------------------------------------------------ 表 */
 static const TND_API_TABLE gApi = {
     sizeof(TND_API_TABLE), TND_API_VERSION,
@@ -459,7 +465,8 @@ static const TND_API_TABLE gApi = {
     api_writecells, api_fill, api_scroll, api_screen,
     api_drv_register,
     api_in_register,
-    api_pci_own
+    api_pci_own,
+    api_blk_register
 };
 
 const TND_API_TABLE *api_get_table(void) { return &gApi; }

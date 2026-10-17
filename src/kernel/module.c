@@ -11,6 +11,8 @@
 #include "tnd.h"
 
 static const TND_MODULE_DEF *gMods[] = {
+    &gModBlk,     /* 块设备层：文件系统的地板 */
+    &gModFat,     /* FAT16 读取：不靠固件的文件系统 */
     &gModTrap,        /* **最前**：先能看见异常，再谈别的 */
     &gModVfs,
     &gModPmm,

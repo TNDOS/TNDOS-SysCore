@@ -367,6 +367,36 @@ void shell_exec_line(char *line) {
      * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
      * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
     /* ==================================================================
+     * **FATDIR —— 用我们自己的块设备 + 我们自己的 FAT 列目录。**
+     *
+     * 和 DIR 的区别就是这件事的全部意义：
+     *   DIR     走固件的 SimpleFileSystem —— **ExitBootServices 之后没有了**
+     *   FATDIR  走 blk + fat          —— **一颗固件服务都不碰**
+     *
+     * 所以在 exitboot 之后敲这条，看到的就是"我们真的接手了"的证据。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "FATDIR")) {
+        int n = blk_count(), i, got = 0;
+        con_puts("\r\n  block devices:\r\n");
+        for (i = 0; i < n; i++) {
+            const TND_BLOCK *b = blk_at(i);
+            con_puts("    ");
+            con_puts(b && b->Name ? b->Name : "?");
+            con_puts("   ");
+            con_u64(b ? b->Sectors : 0);
+            con_puts(" sectors\r\n");
+        }
+        if (!n) {
+            con_puts("  ** none registered -- load AHCI.TNX (or NVME.TNX) first **\r\n\r\n");
+            return;
+        }
+        for (i = 0; i < n; i++) if (fat_mount(i)) { got = 1; break; }
+        if (got) fat_report();
+        else con_puts("  no FAT16 volume found on any block device\r\n\r\n");
+        return;
+    }
+
+    /* ==================================================================
      * **FBWC —— 给帧缓冲开 write-combining（MTRR）。**
      *
      * 真机上刷屏慢的解法。真机帧缓冲是 UC（非缓存）内存，每个像素写都是

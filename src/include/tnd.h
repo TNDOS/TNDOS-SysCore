@@ -86,6 +86,8 @@ extern const TND_MODULE_DEF gModDrv;
 extern const TND_MODULE_DEF gModTnx;
 extern const TND_MODULE_DEF gModConf;
 extern const TND_MODULE_DEF gModPci;
+extern const TND_MODULE_DEF gModBlk;    /* 块设备层 */
+extern const TND_MODULE_DEF gModFat;    /* FAT 文件系统（不靠固件） */
 
 /* ---- PCI（kernel/pci.c）
  * 走 ECAM（内存映射的配置空间）—— 内核是 MS ABI，碰不到 0xCF8/0xCFC。
@@ -107,6 +109,20 @@ void module_report(void);
 
 /* ============================ 驱动加载（DEVICE=） ======================== */
 #define TND_MAX_DRIVERS 16
+#define TND_MAX_BLK     4       /* 最多几个块设备 */
+
+/* ------------------------------------------------------- 块设备层（blk 模块）
+ * 驱动通过 API 的 blk_register 把读扇区交进来，文件系统从这里取。 */
+int                blk_register(const TND_BLOCK *b);   /* API 那边转发到这里 */
+int                blk_count(void);
+const TND_BLOCK   *blk_at(int i);
+int                blk_read(int idx, UINT64 lba, UINT32 count, void *buf);
+
+/* ------------------------------------------------------- FAT 文件系统（fat 模块）
+ * 在块设备上找一个 FAT 卷并读它。**不依赖任何固件服务。** */
+int  fat_mount(int blkIdx);
+void fat_report(void);        /* 把根目录列出来 */
+int  fat_ready(void);
 int  drv_init(void);
 EFI_STATUS drv_load(const char *path);
 

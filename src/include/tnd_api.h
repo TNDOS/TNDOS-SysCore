@@ -40,7 +40,7 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020600u
+#define TND_API_VERSION 0x00020700u
 
 /* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
  * 没法照搬，固件给什么形状就是什么形状。
@@ -167,6 +167,21 @@ typedef struct {
 #define TND_DRV_BUS     4    /* 总线，产出设备交给别的驱动 */
 
 /* 设备描述。**现在是扁平的，没有设备树** —— 总线驱动的产物就是这些东西。 */
+/* ------------------------------------------------ 块设备（v2.7）
+ *
+ * 一个块设备就是"能按扇区读的一大片存储"。内核的 FAT 挂在它上面。
+ * **驱动只管读扇区，不管文件系统** —— 那两层分开，谁换谁都不影响对方。
+ */
+typedef struct {
+    tnd_u32     StructSize;
+    const char *Name;          /* "AHCI0" / "NVME0" —— 重名会被拒绝 */
+    tnd_u32     SectorSize;    /* 512 */
+    tnd_u32     Reserved;
+    tnd_u64     Sectors;       /* 总扇区数；0 = 未知 */
+    /* 从 lba 起读 count 个扇区到 buf。返回 0 = 成功。 */
+    int (*TND_ABI Read)(tnd_u64 lba, tnd_u32 count, void *buf);
+} TND_BLOCK;
+
 typedef struct {
     tnd_u32 StructSize;
     tnd_u32 Type;
@@ -311,6 +326,17 @@ typedef struct {
      *
      * **只对自己那个设备调** —— GOP 挂在 00:01.0 上，摘了它屏幕就黑。 */
     int  (*TND_ABI pci_own)(int bus, int dev, int fun);
+
+    /* --- 块设备（v2.7）
+     * 驱动把「读扇区」交出来，内核的文件系统就能在它上面挂 FAT。
+     *
+     * **这是 ExitBootServices 之后还能 DIR 的前提** —— 在那之前文件系统一直
+     * 是固件的 SimpleFileSystem，退出之后它就没了。
+     *
+     * Read(lba, count, buf)：从 lba 起读 count 个 512 字节扇区到 buf，
+     * 返回 0 表示成功。**扇区大小现在恒为 512**，所有驱动都一样。
+     * 名字重复返回失败（不静默覆盖）。 */
+    int  (*TND_ABI blk_register)(const TND_BLOCK *b);
 
 } TND_API_TABLE;
 
