@@ -214,13 +214,13 @@ const TND_DEVICE *pci_device(int i) {
     return (i >= 0 && i < gPciCount) ? &gPciDev[i] : 0;
 }
 
-void pci_scan(void) {
+/* 扫**一条**总线。pci_scan 对 bus 0 和每个 VMD 的总线段各调一次。 */
+static void scan_bus(UINT8 only) {
     UINT8 bus, dev, fn;
 
-    gPciCount = 0;
-    if (!gEcamOk) return;
+    if (gPciCount >= TND_MAX_PCI) return;
 
-    /* **只扫起点总线（0），不盲扫 0..255。**
+    /* **只扫这一条，不盲扫 0..255。**
      *
      * MCFG 说这段 ECAM 覆盖 bus 0..255，但**没实现的总线在某些机器上会
      * 别名回 bus 0** —— QEMU 就是这样。盲扫的后果是同一批设备被数 8 遍
@@ -228,7 +228,7 @@ void pci_scan(void) {
      *
      * 真实的多总线只能从 **PCI 桥的 secondary bus 号**走 —— 那是下一步。
      * 先把 bus 0 做对：PC 上的设备本来就几乎都在 bus 0。 */
-    for (bus = gEcamBusStart; bus < gEcamBusStart + 1; bus++) {
+    for (bus = only; bus == only; bus++) {
         for (dev = 0; dev < 32; dev++) {
             UINT16 v = pci_vendor(bus, dev, 0);
             UINT8  nfn = 1;
@@ -300,6 +300,56 @@ void pci_scan(void) {
 
                 gPciCount++;
             }
+        }
+    }
+
+}
+
+/* ============================================================================
+ * 枚举入口
+ *
+ * **VMD（Volume Management Device）是这版新加的，理由是实测。**
+ *
+ * 真机上：笔记本自己组了硬盘阵列（Intel RST/VMD），exitboot 之后
+ * "no block device at all"，而且屏幕上**连一句 [nvme] 都没有** —— 因为
+ * NVMe 控制器根本不在 bus 0 上，VMD 把它藏在自己那段总线后面。
+ *
+ * 但不能盲扫 0..255（见 scan_bus 上面那段：未实现的总线会别名回 bus 0）。
+ * 正确做法是**问 VMD 它占哪段总线** —— 配置空间 0x40 的 VMCAP：
+ *     bits 15:8   总线号起点
+ *     bits 23:16  总线数量
+ * 然后只扫那一段，既找得到设备，又碰不到未实现的总线。
+ * ==========================================================================*/
+void pci_scan(void) {
+    int i, n;
+
+    gPciCount = 0;
+    if (!gEcamOk) return;
+
+    scan_bus(gEcamBusStart);
+
+    /* 只对 bus 0 上找到的设备发问 —— VMD 一定在 bus 0。 */
+    n = gPciCount;
+    for (i = 0; i < n; i++) {
+        /* class 0x01 存储 / subclass 0x04 RAID：这就是 VMD（或类似的
+         * 卷管理控制器）。PCI 规范里它叫 "RAID bus controller"。 */
+        if ((UINT32)gPciDev[i].Class != 0x010400u) continue;
+        {
+            UINT8  vb = (UINT8)gPciDev[i].Bus;
+            UINT8  vd = (UINT8)gPciDev[i].Dev;
+            UINT8  vf = (UINT8)gPciDev[i].Fun;
+            UINT32 cap  = pci_read32(vb, vd, vf, 0x40);
+            UINT8  base = (UINT8)((cap >> 8) & 0xFF);
+            UINT8  cnt  = (UINT8)((cap >> 16) & 0xFF);
+            UINT8  b;
+
+            if (cnt == 0 || cnt > 32) cnt = 1;
+            log_puts("[log] pci: VMD "); log_hex((UINT64)((vd << 3) | vf));
+            log_puts(" covers buses "); log_u64((UINT64)base);
+            log_puts(".."); log_u64((UINT64)(base + cnt - 1));
+            log_puts(" -- scanning them\r\n");
+
+            for (b = base; b != (UINT8)(base + cnt); b++) scan_bus(b);
         }
     }
 
