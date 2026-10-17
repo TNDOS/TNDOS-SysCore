@@ -381,6 +381,7 @@ int    pmm_init(void);
 void   pmm_stats(PMM_STATS *out);
 void   pmm_report(void);
 int    pmm_page_is_free(UINT64 addr);   /* 给帧缓冲 WC 做安全检查用 */
+int    pmm_window_ok(UINT64 base);      /* 那个 TNX 窗口真的从固件手里拿到了吗 */
 
 /* 给帧缓冲那段内存开/关 write-combining（MTRR）。返回 0 成功。
  * **默认不开**：MTRR 设错会把普通内存变成 WC，那是数据损坏。
@@ -392,7 +393,7 @@ UINT64 pmm_alloc_page(void);
 UINT64 pmm_alloc_pages(UINTN count);
 void   pmm_free_page(UINT64 addr);
 void   pmm_free_pages(UINT64 addr, UINTN count);
-void   pmm_reserve(UINT64 base, UINTN pages);
+int    pmm_reserve(UINT64 base, UINTN pages);   /* 1 = 真的从固件手里拿到了 */
 int    pmm_selftest(void);
 
 /* ============================ 内核堆（M3） =============================== */

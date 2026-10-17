@@ -203,6 +203,14 @@ static const UINT64 kWindows[] = { TNX_PROG_BASE, TNX_DRIVER_BASE };
 static int window_ok(UINT64 base) {
     for (int i = 0; i < TNX_WINDOW_COUNT; i++) {
         if (base < kWindows[i] || base >= kWindows[i] + TNX_WINDOW_SIZE) continue;
+        /* **这个窗口必须真的从固件手里拿到了。**
+         * 拿不到还往里写，就是在覆盖固件自己的内存 —— 后果是 ExitBootServices
+         * 里固件断言死循环，而屏幕上只看到"卡住"（实测 RIP=0x493e8, IF=0）。 */
+        if (!pmm_window_ok(kWindows[i])) {
+            log_puts("[log] tnx: window "); log_hex(kWindows[i]);
+            log_puts(" was never claimed -- refusing to load\r\n");
+            return 0;
+        }
         if (kWindows[i] == TNX_DRIVER_BASE)
             return ((base - kWindows[i]) % TNX_DRIVER_SLOT_SIZE) == 0;
         return 1;
