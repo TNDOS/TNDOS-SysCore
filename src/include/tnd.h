@@ -27,7 +27,20 @@
  * 为什么要两个：**驱动是常驻的，程序是临时的。**
  * 只有一个窗口的话，加载程序之前那次清零会把常驻的驱动一起抹掉。
  * 分了窗口，加载程序只清它自己那一块，碰不到驱动。 */
-#define TNX_PROG_BASE    0x0000000001000000ULL   /* 16 MiB —— 程序窗口 */
+/* **程序窗口从 0x1000000 挪到了 0x2800000。**
+ *
+ * 原因：0x1000000..0x1800000 在退出 Boot Services 之前被固件占着，
+ * AllocatePages(AllocateAddress) 拿不到。拿不到的那一个窗口，加载器会拒绝，
+ * 于是所有 TNX 外部程序（tree / attrib / fc / more）在退出前全部
+ *   REJECTED: ImageBase is not a registered window
+ * 而那句话会把人往"基址写错了"的方向带 —— 其实基址是对的，是地址本身不可用。
+ *
+ * 0x2800000 是探测出来的：开机时挨个试 AllocatePages(AllocateAddress)，
+ * 它和 0x3000000 都是空的，而 0x1000000 是 taken。
+ * 窗口 8 MiB，所以占 0x2800000..0x3000000，正好接在驱动窗口后面，不重叠。
+ *
+ * **改这里必须同时改 SDK/linker/tnx.ld 的默认基址，并重链所有 TNX 程序。** */
+#define TNX_PROG_BASE    0x0000000002800000ULL   /* 40 MiB —— 程序窗口 */
 #define TNX_DRIVER_BASE  0x0000000002000000ULL   /* 32 MiB —— 驱动窗口，常驻 */
 #define TNX_WINDOW_SIZE  0x0000000000800000ULL   /*  8 MiB，每个窗口一样大 */
 
