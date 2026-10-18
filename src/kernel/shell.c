@@ -965,12 +965,31 @@ int shell_start(void) {
     con_puts("\r\n");
     con_puts("  " TND_NAME " Shell  (" TND_VERSION ")   type HELP for commands, EXIT to return\r\n");
 
-    /* last step of the boot chain: run autoexec.bat */
-    if (!EFI_ERROR(t_read_file(TND_AUTOEXEC, buf, TND_FILE_CAP, &len)) && len > 0) {
-        shell_exec_batch("autoexec.bat", buf, len);
-    } else {
-        con_puts("\r\n  (no autoexec.bat, skipped)\r\n");
-        log_kv("autoexec", "missing");
+    /* last step of the boot chain: run autoexec.bat
+     *
+     * **固件读不到就走 FatFs。** 同一个卷、同一个目录，
+     * efidos.sys 用固件读得到，config.sys 和 autoexec.bat 却返回
+     * EFI_MEDIA_CHANGED（0x800000000000000D）。
+     * conf.c 里已经用这条路兜住了 config.sys（实测 fr=0, len=880），
+     * autoexec.bat 用同一招。
+     *
+     * 注意这不是"绕过 bug" —— 最终形态里本来就只有 FatFs 这条路，
+     * 固件那条是过渡期的退路。 */
+    {
+        int ok = 0;
+        if (!EFI_ERROR(t_read_file(TND_AUTOEXEC, buf, TND_FILE_CAP, &len)) && len > 0) {
+            ok = 1;
+        } else if (fat_ready()) {
+            int fr = fat_read_text(TND_AUTOEXEC, buf, TND_FILE_CAP, &len);
+            log_puts("[log] autoexec: fat fallback fr="); log_u64((UINT64)fr);
+            log_puts(" len="); log_u64((UINT64)len); log_puts("\r\n");
+            if (fr == 0 && len > 0) ok = 1;
+        }
+        if (ok) shell_exec_batch("autoexec.bat", buf, len);
+        else {
+            con_puts("\r\n  (no autoexec.bat, skipped)\r\n");
+            log_kv("autoexec", "missing");
+        }
     }
 
     con_puts("\r\n");

@@ -57,6 +57,26 @@ EFI_STATUS t_open_root(EFI_HANDLE image) {
 }
 
 /* 把一个 ASCII 路径整体读进 buf。成功时 *outLen 是实际长度，并补一个 0。 */
+/* **把 EFI_STATUS 翻成符号名。**
+ * 只打 0x8000000000000002 这种数字，人会按错的含义去理解 ——
+ * 我自己就把 2 当成 EFI_LOAD_ERROR，而它其实是 EFI_INVALID_PARAMETER。 */
+static const char *efi_status_name(UINT64 s) {
+    switch (s) {
+    case 0:  return "EFI_SUCCESS";
+    case 2:  return "EFI_INVALID_PARAMETER";
+    case 3:  return "EFI_UNSUPPORTED";
+    case 4:  return "EFI_BAD_BUFFER_SIZE";
+    case 5:  return "EFI_BUFFER_TOO_SMALL";
+    case 6:  return "EFI_NOT_READY";
+    case 7:  return "EFI_DEVICE_ERROR";
+    case 8:  return "EFI_WRITE_PROTECTED";
+    case 9:  return "EFI_OUT_OF_RESOURCES";
+    case 14: return "EFI_NOT_FOUND";
+    case 15: return "EFI_ACCESS_DENIED";
+    default: return "(other)";
+    }
+}
+
 EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen) {
     EFI_FILE_PROTOCOL *f = 0;
     CHAR16 wname[260];
@@ -90,7 +110,14 @@ EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen) {
     s = gEnv.Root->Open(gEnv.Root, &f, wname, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(s) || !f) {
         log_puts("[log] file# open FAILED: "); log_puts(name);
-        log_puts("  status="); log_u64((UINT64)s); log_puts("\r\n");
+        log_puts("  status="); log_u64((UINT64)s);
+        log_puts(" ("); log_puts(efi_status_name((UINT64)s)); log_puts(")");
+        /* **把实际传进去的 UTF-16 名也打出来。**
+         * EFI_INVALID_PARAMETER 的一个来源就是 FileName 本身非法，
+         * 而那是我们自己的 t_ascii_to_u16 生成的 —— 不看一眼没法排除。 */
+        log_puts("  wname=["); 
+        { int k; for (k = 0; k < 12 && wname[k]; k++) log_putc((char)(wname[k] < 128 ? wname[k] : '?')); }
+        log_puts("]\r\n");
         return s;
     }
 
