@@ -263,27 +263,32 @@ int fat_selftest(void) {
  *   volume starts at LBA 0
  * 那两行对我们有用，对看屏幕的人没用。DOS 的 dir 第一行是卷标和目录名，
  * 最后一行是统计。**把调试信息让到串口去，屏幕上只留人要看的东西。** */
-void fat_report(void) {
+/* 列一个目录。path == 0 表示**当前目录**（"."）。
+ *
+ * 这里踩过一个难看的错：原来写死 f_opendir("/")，于是不管你在哪个目录，
+ * dir 列出来的永远是根目录 —— 而表头上还写着 "Directory of C:\"，
+ * 看起来像是对的。**命令行列出错目录比报错危险得多**：报错你知道有问题，
+ * 列错目录你会照着它做决定。 */
+static void list_one(const char *path) {
     DIR   dir;
     FILINFO fi;
     FRESULT fr;
     int   nDir = 0, nFile = 0;
     UINT64 bytes = 0;
     UINTN  col;
+    char   cwd[TND_MAX_PATH];
 
-    if (!gMounted) {
-        con_puts("  no FAT volume mounted\r\n");
-        return;
+    if (!path) {
+        if (f_getcwd(cwd, (UINT)sizeof(cwd)) != FR_OK) t_strncpy(cwd, "\\", sizeof(cwd));
+        path = cwd;
     }
 
-    log_puts("[log] fat: listing, volume base LBA ");
-    log_u64(gFatVolBase);
-    log_puts("\r\n");
-
     con_puts("\r\n Volume in drive C\r\n");
-    con_puts(" Directory of C:\\\r\n\r\n");
+    con_puts(" Directory of C:");
+    con_puts(path);
+    con_puts("\r\n\r\n");
 
-    fr = f_opendir(&dir, "/");
+    fr = f_opendir(&dir, path);
     if (fr != FR_OK) {
         con_puts("  cannot open directory, FRESULT=");
         con_u64((UINT64)fr);
@@ -307,7 +312,7 @@ void fat_report(void) {
     }
     f_closedir(&dir);
 
-    fr = f_opendir(&dir, "/");
+    fr = f_opendir(&dir, path);
     if (fr == FR_OK) {
         for (;;) {
             fr = f_readdir(&dir, &fi);
@@ -335,3 +340,8 @@ void fat_report(void) {
     con_puts("  "); con_u64((UINT64)nDir);
     con_puts(" dir(s)\r\n\r\n");
 }
+
+/* 对外两个入口：fat_report 列当前目录，fat_list 列指定目录。
+ * **不带参数的那个也要走"当前目录"** —— 见 list_one 上面那段注释。 */
+void fat_report(void) { if (gMounted) list_one(0); else con_puts("  no FAT volume mounted\r\n"); }
+void fat_list(const char *path) { if (gMounted) list_one(path); else con_puts("  no FAT volume mounted\r\n"); }

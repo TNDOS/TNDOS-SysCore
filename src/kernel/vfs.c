@@ -424,10 +424,22 @@ int vfs_dir(const char *dos) {
     if (!fat_ready()) {
         int bi, bn = blk_count();
         for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        /* **挂上之后立刻把 shell 的当前目录同步给 FatFs。**
+         *
+         * 这两个是**两个**当前目录：gCwd 是 shell 的（vfs_init 里设成 EFITNDOS），
+         * FatFs 自己也有一个（默认 "."，也就是根）。
+         * 不同步的话，f_getcwd 会诚实地告诉你 "."，而 dir 就列根目录 ——
+         * 表头写 "Directory of C:." 看起来还挺像回事。
+         *
+         * 实测就是这么发现的：C:EFITNDOS> dir 列出了根目录的三个条目。 */
+        (void)f_chdir(gCwd);
     }
     if (fat_ready()) {
-        (void)dos;
-        fat_report();
+        /* **把参数传下去。** 原来这里写的是 (void)dos + fat_report()，
+         * 于是 dir 永远列根目录 —— 而且表头还写着 "Directory of C:\"，
+         * 看起来像是对的。命令行列出错目录比报错危险得多。 */
+        while (*dos == ' ') dos++;
+        fat_list(*dos ? dos : 0);
         return 0;
     }
     if (gBsGone) {
