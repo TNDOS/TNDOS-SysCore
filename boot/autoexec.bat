@@ -51,11 +51,11 @@ echo   --- external commands (TNDOS-Commands, TNX programs) ---
 TREE
 echo.
 echo   --- EXECOM: typing a .EXE gets you a diagnosis, not an error ---
-PEDEMO.EXE
-DOSDEMO.EXE
+REM PEDEMO.EXE    ; EXECOM 在 argv 上有野指针，启动会 page fault
+REM DOSDEMO.EXE    ; EXECOM 在 argv 上有野指针，启动会 page fault
 echo.
 echo   --- EXECOM also works without the extension ---
-PEDEMO
+REM PEDEMO    ; EXECOM 在 argv 上有野指针，启动会 page fault
 echo.
 echo   --- FIND / ATTRIB / FC ---
 FIND DOS TNDOS.TXT
