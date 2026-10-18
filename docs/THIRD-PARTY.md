@@ -1,0 +1,99 @@
+# 第三方代码清单 Third-party components
+
+本文件记录 TNDDOS 中所有非原创代码。 This file records every piece of non-original code in TNDDOS.
+
+**规则 Rules**
+
+```
+· 主项目是 MIT，但**第三方组件保留它自己的许可证**
+  The project is MIT, but **third-party components keep their own licence**
+· 每引入一个组件，必须在本文件登记：来源、版本、许可证、改动、许可证原文位置
+  Every component is registered here: origin, version, licence, modifications, where the licence text lives
+· **不删原作者版权声明，不把别人的代码标成 MIT**
+  Never strip the original copyright notice, never relabel someone else's code as MIT
+· 许可证宽松不等于自动通过 —— 还要逐文件看声明、依赖、附加条款
+  A permissive licence is not an automatic pass -- check per-file notices, dependencies and extra terms
+· GPL / LGPL 不作为默认候选，除非专门做过兼容性评估
+  GPL / LGPL are not default candidates without a dedicated compatibility review
+```
+
+## 已引入 Components in use
+
+### FatFs R0.16
+
+```
+来源    http://elm-chan.org/fsw/ff/   (ChaN)
+版本    R0.16, 2025-07-22
+位置    repos/TNDOS-SDK/third_party/fatfs/
+许可证   FatFs License（BSD 风格，宽松）
+        原文见 source/ff.h 文件头的 "FatFs - Generic FAT Filesystem module" 段落
+改动    1  ffconf.h 改了五项配置（READONLY=1 / CODE_PAGE=437 / FS_RPATH=2 /
+           FS_NORTC=1 / USE_LFN=0）—— 只改配置，不改代码
+        2  ff.c、ff.h、diskio.h **一个字都没改**
+        3  新增 fatfs_glue.c / fatfs_tnd.h —— 这是我们自己的接合层，MIT
+状态    ff.c / fatfs_glue.c 单独编译通过；**尚未接入内核构建列表**
+注意    R0.16 官方有 patch-1 / patch-2，ZIP 里不含。拿到后记在本文件下。
+```
+
+## 计划引入 Planned
+
+### NVMe —— 优先 OpenBSD 的 nvme.c
+
+```
+许可证  ISC 风格宽松（文件头直接列出条件）
+理由    纯 C、通用、不绑厂商，而且许可证是我们要的
+用法    **搬枚举和命令提交的逻辑**，不搬它的 OS 抽象层
+        （bus_dma / mutex / 中断这些要换成我们自己的）
+状态    待获取
+```
+
+### AHCI —— 优先 OpenBSD 的 ahci.c
+
+```
+同上。同许可证系列，同一套移植策略。
+状态    待获取
+```
+
+### IDE(PATA) —— 优先 OpenBSD 的 wdc.c / pciide.c
+
+```
+**这是 QEMU 的刚需，不是实体机的刚需。**
+（-machine pc 用的是 PIIX IDE；q35 是 AHCI）
+作者的原话：「IDE 也是 VM 刚需，不是实体机刚需」
+状态    待获取
+```
+
+### EDK2 —— 只做参考，不搬代码
+
+```
+许可证  BSD-2-Clause-Patent（宽松）
+用法    **看它怎么枚举设备、怎么和硬件通信**，把能搬的**逻辑**搬过来，
+        但不是逐行复制 —— 因为它和 UEFI Boot Services 深度耦合
+        （AllocatePool / PCI IO 协议 / 事件回调），退出之后它自己就死了
+状态    参考
+```
+
+## 显示 Display
+
+```
+**不做驱动。** No driver.
+
+GOP 协议退出之后失效，但**帧缓冲那块内存还在** ——
+我们拿到的 Base / Stride / 分辨率都是普通数字，照像素继续写就行。
+唯一改不了的是分辨率、像素格式（那些要在退出前调 SetMode）。
+
+所以显示这一块：退出前用 GOP 记参数，退出后自己往内存写。没有第三方代码。
+```
+
+## 登记模板 Template
+
+```
+### <组件名> <版本>
+
+来源    <URL / 作者>
+版本    <版本号, 日期>
+位置    <目录>
+许可证  <许可证名>；原文见 <文件>
+改动    <逐条列出改了什么；没改就写"未修改">
+状态    <已接入 / 编译通过但未接入 / 待获取 / 仅参考>
+```
