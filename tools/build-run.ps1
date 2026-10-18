@@ -182,7 +182,7 @@ function Build-Pe([string[]]$Src, [string]$Out) {
     $a = @('-target','x86_64-pc-windows-msvc','-O2','-ffreestanding','-fno-builtin','-fshort-wchar','-nostdlib',
            '-fno-stack-protector','-mno-red-zone','-Wall',
            '-Wl,/subsystem:efi_application,/entry:efi_main','-Wl,/machine:x64',
-           '-I', $Inc) + $S + @('-o', $Out)
+           '-I', $Inc) + $(if ($FatFsDir) { @('-I', $FatFsDir) } else { @() }) + $S + @('-o', $Out)
     Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $a
     if ($script:NativeExit -ne 0) { throw ("clang 编译失败: " + $Out) }
     Write-Host ("         -> " + (Get-Item $Out).Length + " bytes")
@@ -208,6 +208,8 @@ Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
                           (Join-Path $Root 'src\kernel\pci.c'),
 (Join-Path $Root 'src\kernel\blk.c'),
              (Join-Path $Root 'src\kernel\fat.c'),
+             $(if ($FatFsDir) { Join-Path $FatFsDir 'ff.c' } else { '' }),
+             $(if ($FatFsDir) { Join-Path $FatFsDir 'fatfs_glue.c' } else { '' }),
              (Join-Path $Root 'src\kernel\fbwc.c'),
              (Join-Path $Root 'src\lib\time.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
 
