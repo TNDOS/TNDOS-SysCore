@@ -379,3 +379,73 @@ __asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));   /* 在 trap_common 里 */
 **下一步就是把这个函数的完整反汇编读完，逐条找有没有不配对的 `addq $..., %rsp` 或提前 `ret`。**
 
 ---
+
+---
+
+## 十二、2026-10-18 22:2x 的新证据（推翻了我上一节的两个推论）
+
+### 实测数据（这次 trap 已经把 rsp/rbp 打出来了）
+
+```
+*** CPU EXCEPTION ***  page fault
+  vector : 14
+  errcode: 0x0000000000000000
+  RIP    : 0x0000000002800F30
+  CS     : 0x0000000000000038
+  RFLAGS : 0x0000000000010246
+  CR2    : 0xFFFFFFFFC7EBEC4D
+  RSP    : 0x0000000002FFFFB0      <-- 有效！正好在 stackTop(0x2FFFFC0) 下面 16 字节
+  RBP    : 0x0000000002FFFFB0      <-- 有效！
+```
+
+**`RSP` / `RBP` 都是合法的** —— 所以：
+
+- **上一节"进 `tnd_argv` 时 rsp 已经坏了"的推论是错的。**
+- **`tnx_call_on_stack` 是有效的** —— `0x2FFFFC0 - 0x10 = 0x2FFFFB0`，
+  正好是"切栈 + `callq` 压返回地址 + `push rbp`"之后应有的值。
+
+### 反汇编来源也确认了
+
+之前用 `hello.elf` 反汇编 `0x2800F30`，担心 ELF 与 TNX 布局不同。
+**直接按 TNX 段表核对了**：`HELLO.TNX` 的 CODE 段在文件 `0xFD8` 对应 RVA `0xF28`，
+而文件 `0xFE0` 处的字节是：
+
+```
+0xFE0 (RVA 0xF30):  55 48 89 E5               pushq %rbp ; movq %rsp,%rbp
+0xFE4 (RVA 0xF34):  48 8B 05 05 16 00 00      movq  0x1605(%rip),%rax   -> 0x2802540 (gApi)
+0xFE8 (RVA 0xF38):  48 85 C0                  testq %rax,%rax
+0xFEC (RVA 0xF3C):  48 8B 40 30               movq  0x30(%rax),%rax
+0xFF0 (RVA 0xF40):  48 85 C0                  testq %rax,%rax
+0xFF6 (RVA 0xF46):  5D                        popq  %rbp
+0xFF7 (RVA 0xF47):  FF E0                     jmpq  *%rax
+```
+
+**ELF 和 TNX 在这个地址上是同一条指令** —— 这一点现在可以确认。
+
+### 但这里有一对互相矛盾的证据
+
+| 证据 | 含义 |
+|---|---|
+| `errcode = 0` | P=0, W=0, U=0 —— **这是一次"读"造成的缺页** |
+| `RIP = 0x2800F30` | 这条是 `pushq %rbp` —— **写操作** |
+| `CR2 = 0xFFFFFFFFC7EBEC4D` | `CR2 - 0x30 = 0xFFFFFFFFC7EBEC1D`，正好能解释成"**`gApi` 是野值，`[gApi+0x30]` 读飞**" |
+
+`pushq` 不可能产生 `W=0` 的缺页。**所以要么 trap 记录的 RIP 不可靠，
+要么运行时 `0x2800F30` 对应的不是这条 push。**
+
+### 现在最该做的两件事
+
+1. **在 QEMU 里挂 gdb，断在 `0x2800F30`**，看真实的 `$rip`、`$rax`、`$rsp`。
+   特别是 `$rax` —— **如果它是 `0xFFFFFFFFC7EBEC1D`，那 `gApi` 就是野的**，
+   问题在 `tnx_entry(api)` 收到的参数，或者 `gApi` 被谁覆盖了。
+2. **核对 `trap.c` 的 frame 布局**：`RIP` 取的是 `frame[1]`，
+   而 `trap.c` 的注释说 `frame[0]=errcode, [1]=RIP, [2]=CS, [3]=RFLAGS`。
+   **CS 打出来是 `0x38`（正确）、RFLAGS 是 `0x10246`（合理）**，
+   所以 frame 布局看起来是对的 —— 但也可能只是"看起来对"。
+
+### 我犯过的错，记在这里免得下一个人重走
+
+1. **把 `CR2` 抄错了**（多一个 F，E 写成 C）—— 外部评审抓到的
+2. **拿 `execom.elf` 解释 `hello` 的崩溃** —— 两个程序同一个基址，但布局不同
+3. **在 `trap_common` 里 `mov %%rsp` 当成现场栈指针** —— 那是处理器的栈
+4. **基于"栈坏了"推了两轮，而 RSP 一直是好的**
