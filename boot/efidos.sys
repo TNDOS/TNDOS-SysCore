@@ -32,10 +32,7 @@ DEVICE=VGA.EFI
 ;
 DEVICE=PS2.TNX
 DEVICE=NVME.TNX
-; **AHCI.TNX 暂时关掉。** 实测：它打开失败之后，后面所有的文件打开
-; 都返回 EFI_MEDIA_CHANGED（config.sys / autoexec.bat / 字体全挂）。
-; 先确认这条因果，再回来修 AHCI 本身。
-; DEVICE=AHCI.TNX
+DEVICE=AHCI.TNX
 SET TNDOS_SYSTEM=1
 SET TNDOS_ROOT=C:\TNDOS
 SET PATH=C:\;C:\TNDOS;C:\BIN
