@@ -444,3 +444,31 @@ static void list_one(const char *path) {
  * **不带参数的那个也要走"当前目录"** —— 见 list_one 上面那段注释。 */
 void fat_report(void) { if (gMounted) list_one(0); else con_puts("  no FAT volume mounted\r\n"); }
 void fat_list(const char *path) { if (gMounted) list_one(path); else con_puts("  no FAT volume mounted\r\n"); }
+
+/* ============================================================================
+ * fat_read_text —— 把一个文本文件读进缓冲（给 conf.c 兜底用）
+ *
+ * 为什么需要它：固件那条路在读 config.sys 时返回 EFI_LOAD_ERROR，
+ * 而前后两个文件都读得到。与其在固件上继续猜，不如用自己的 FatFs。
+ *
+ * 返回 FRESULT；*outLen 是实际字节数。成功时补一个 0。
+ * ==========================================================================*/
+int fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen) {
+    FIL    fil;
+    FRESULT fr;
+    UINT   br = 0;
+
+    if (outLen) *outLen = 0;
+    if (!gMounted || !buf || !cap) return (int)FR_NOT_READY;
+
+    fr = f_open(&fil, path, FA_READ);
+    if (fr != FR_OK) return (int)fr;
+
+    fr = f_read(&fil, buf, (UINT)(cap - 1), &br);
+    f_close(&fil);
+    if (fr != FR_OK) return (int)fr;
+
+    buf[br] = 0;
+    if (outLen) *outLen = (UINTN)br;
+    return 0;
+}

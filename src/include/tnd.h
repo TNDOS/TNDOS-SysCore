@@ -133,6 +133,7 @@ int  fat_mount(int blkIdx);
 void fat_report(void);        /* 把根目录列出来 */
 int  fat_selftest(void);      /* FATWRITE：建 / 写 / 读回 / 比对 */
 void fat_list(const char *path);   /* 列指定目录；path 为空 = 当前目录 */
+int  fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen);
 int  fat_ready(void);
 int  drv_init(void);
 EFI_STATUS drv_load(const char *path);

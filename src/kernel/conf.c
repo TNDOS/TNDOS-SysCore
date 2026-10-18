@@ -66,9 +66,38 @@ void conf_parse(const char *path, int isSystem) {
                       : "-- config.sys   user config\r\n");
 
     if (EFI_ERROR(t_read_file(path, buf, TND_FILE_CAP, &len)) || len == 0) {
-        con_puts("   (missing or empty, skipped)\r\n");
-        log_kv("conf", "missing");
-        return;
+        /* ============================================================
+         * **固件读不到，就用自己的 FatFs 再试一次。**
+         *
+         * 实测：efidos.sys 读得到、config.sys 读不到（EFI_LOAD_ERROR），
+         * 而紧接着的 autoexec.bat 又读得到 —— 同一个目录、同一个调用，
+         * 偏偏中间那一个失败。那就别在固件这条路上继续猜了。
+         *
+         * 兜底放在 conf.c 而不是 file.c：file.c 也编进 BOOTX64.EFI，
+         * 而 FatFs 只在内核里。
+         *
+         * 这一步同时把"读配置文件"从固件依赖里摘出来，
+         * 那本来就是 docs/TRANSITIONAL.md 里记着的一笔账。
+         * ============================================================ */
+        /* **先试挂载** —— FatFs 平时是在 vfs_dir 里懒挂的，
+         * 而 config.sys 比第一次 dir 早得多。不在这里挂一次，
+         * 兜底就永远走不到。 */
+        if (!fat_ready()) {
+            int bi, bn = blk_count();
+            for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        }
+        if (fat_ready()) {
+            int fr = fat_read_text(path, buf, TND_FILE_CAP, &len);
+            log_puts("[log] conf: fat fallback fr="); log_u64((UINT64)fr);
+            log_puts(" len="); log_u64((UINT64)len); log_puts("\r\n");
+        } else {
+            log_puts("[log] conf: no FAT volume yet, fallback unavailable\r\n");
+        }
+        if (len == 0) {
+            con_puts("   (missing or empty, skipped)\r\n");
+            log_kv("conf", "missing");
+            return;
+        }
     }
 
     char *p = buf;
