@@ -96,19 +96,66 @@ static void take_mcfg(const ACPI_SDT *sdt) {
     const UINT8 *end = (const UINT8 *)sdt + sdt->Length;
     int n = 0;
 
-    while (p + sizeof(ACPI_MCFG_ENTRY) <= end) {
-        const ACPI_MCFG_ENTRY *e = (const ACPI_MCFG_ENTRY *)p;
-        if (e->BaseAddress) {
-            gEcamBase = e->BaseAddress;
-            gEcamBusStart = e->StartBus;
-            gEcamBusEnd = e->EndBus;
-            gEcamOk = 1;
-            log_puts("[log] pci: ECAM at "); log_hex(gEcamBase);
-            log_puts("  bus "); log_u64(e->StartBus);
-            log_puts(".."); log_u64(e->EndBus); log_puts("\r\n");
-            n++;
+    /* ================================================================
+     * **MCFG 可能有多条记录，而且不能"最后一条赢"。**
+     *
+     * 原来这里每遇到一条有效记录就覆盖 gEcamBase —— 结果**最后一条生效**。
+     * QEMU 的 MCFG 只有一条，所以永远是对的；真机上（尤其是 AMD 新平台）
+     * 完全可能有多条，而**最后一条未必覆盖 bus 0** —— 于是枚举扫到一段
+     * 空的总线范围：看起来"枚举跑完了"，实际一个设备都没读到。
+     *
+     * 现在的规则：
+     *   1  每一条都打到串口（真机上就能看到到底有几条、各覆盖哪段）
+     *   2  **优先选 Segment == 0 且 StartBus == 0 的那条** —— bus 0 必须能访问
+     *   3  没有完全匹配的，就选第一条 Segment == 0 的（宁可扫窄一点，
+     *      也不要用一条从 bus 0x40 开始的记录去访问 bus 0）
+     * ================================================================ */
+    {
+        UINT64 firstBase = 0;
+        UINT8  firstStart = 0, firstEnd = 0;
+        int    sawAny = 0;
+
+        while (p + sizeof(ACPI_MCFG_ENTRY) <= end) {
+            const ACPI_MCFG_ENTRY *e = (const ACPI_MCFG_ENTRY *)p;
+
+            if (e->BaseAddress) {
+                log_puts("[log] pci: MCFG entry seg="); log_u64((UINT64)e->PciSegment);
+                log_puts(" base="); log_hex(e->BaseAddress);
+                log_puts(" bus "); log_u64(e->StartBus);
+                log_puts(".."); log_u64(e->EndBus); log_puts("\r\n");
+
+                if (e->PciSegment == 0) {
+                    if (!sawAny) {
+                        firstBase = e->BaseAddress;
+                        firstStart = e->StartBus;
+                        firstEnd = e->EndBus;
+                        sawAny = 1;
+                    }
+                    if (e->StartBus == 0) {
+                        /* 完全匹配：bus 0 就在这个窗口里 */
+                        gEcamBase = e->BaseAddress;
+                        gEcamBusStart = e->StartBus;
+                        gEcamBusEnd = e->EndBus;
+                        gEcamOk = 1;
+                    }
+                }
+                n++;
+            }
+            p += sizeof(ACPI_MCFG_ENTRY);
         }
-        p += sizeof(ACPI_MCFG_ENTRY);
+
+        if (!gEcamOk && sawAny) {
+            gEcamBase = firstBase;
+            gEcamBusStart = firstStart;
+            gEcamBusEnd = firstEnd;
+            gEcamOk = 1;
+            log_puts("[log] pci: no entry covers bus 0, falling back to the first\r\n");
+        }
+        if (gEcamOk) {
+            log_puts("[log] pci: using ECAM "); log_hex(gEcamBase);
+            log_puts("  bus "); log_u64(gEcamBusStart);
+            log_puts(".."); log_u64(gEcamBusEnd); log_puts("\r\n");
+        }
     }
     if (!n) log_puts("[log] pci: MCFG has no usable entry\r\n");
 }
