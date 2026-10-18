@@ -367,6 +367,42 @@ void shell_exec_line(char *line) {
      * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
      * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
     /* ==================================================================
+     * **PCILIST —— 我们的 PCI 枚举到底看见了哪些设备。**
+     *
+     * 真机上的问题：一块 Samsung NVMe（Windows 原生驱动就能用）我们认不出来。
+     * 那先要回答一个更基本的问题 —— **我们看见它了吗**。
+     *
+     *   看见了但 NVMe 驱动没接住  -> 驱动的问题
+     *   根本没看见              -> 枚举的问题（ECAM / ACPI / 总线范围）
+     *
+     * 这两条路的修法完全不同，不先把它们分开就是在赌。
+     *
+     * 输出每行是：BDF  class(4 位)  vendor:device  名字
+     * class 0x010802 就是 NVMe 控制器，0x010400 是 RAID/VMD。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "PCILIST")) {
+        int n = pci_device_count(), i;
+        con_puts("\r\n  PCI devices: ");
+        con_u64((UINT64)n);
+        con_puts("\r\n");
+        for (i = 0; i < n; i++) {
+            const TND_DEVICE *d = pci_device(i);
+            if (!d) continue;
+            con_puts("    ");
+            con_puts(d->Name);
+            con_puts("   class="); con_u64((UINT64)d->Class);
+            con_puts("   "); con_u64((UINT64)d->Vendor);
+            con_puts(":"); con_u64((UINT64)d->Device);
+            if ((d->Class & 0xFFFF00) == 0x010800) con_puts("   <- NVMe");
+            if (d->Class == 0x010400)               con_puts("   <- RAID/VMD");
+            con_puts("\r\n");
+        }
+        if (!n) con_puts("    ** nothing -- ECAM or ACPI failed, see the serial log **\r\n");
+        con_puts("\r\n");
+        return;
+    }
+
+    /* ==================================================================
      * **FSINFO —— 把每个探测点的引导扇区解出来。**
      *
      * 用途只有一个：区分「盘上真的没文件」和「我读错了地方」。
