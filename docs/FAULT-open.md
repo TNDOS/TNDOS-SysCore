@@ -112,3 +112,56 @@ C  平台的 FAT32 驱动在 N 次打开后撞到内部上限
 ```
 
 **第一条最可疑**：我们的 FAT16 路径从来没在 FAT32 上跑过。
+
+---
+
+## 程序窗口不可用 —— `tree` 和所有外部命令被拒
+
+**现象**
+
+```
+C:\EFI\TNDOS>tree
+REJECTED: ImageBase is not a registered window
+```
+
+**退出 Boot Services 之后一样失败**，这一条是关键证据。
+
+`TREE.TNX` 的文件头本身是对的：
+
+```
++0   0x1A584E54      TNX magic
++32  0x1000000       ImageBase = 16 MiB = TNX_PROG_BASE   ✓
++40  0x1B20          image size 6944                       ✓
+```
+
+**所以那句错误消息是在骗人** —— 基址完全正确。
+
+**真正的链条**
+
+```c
+tnx.c:262   if (!window_ok(h->ImageBase)) { *why = "ImageBase is not a registered window"; ... }
+tnx.c:208   static const UINT64 kWindows[] = { TNX_PROG_BASE, TNX_DRIVER_BASE };   /* 两个都登记了 */
+pmm.c:246   if (base == TNX_PROG_BASE) return gWinProgOk;   /* 返回缓存值 */
+pmm.c:142   gWinProgOk = pmm_reserve(TNX_PROG_BASE, ...);   /* 只在启动时算一次 */
+```
+
+启动时 `pmm_reserve` 失败 → `gWinProgOk = 0` → **之后永远返回 0，哪怕内存早就空了**。
+
+**退出之后也失败**说明问题不在"固件占着"，而在"这个判断从不重新看一眼"。
+
+**建议的修法（B）**
+
+不要"启动时整块预留 8 MiB"，改成"用的时候确认"：
+
+- 程序窗口本来就是用完就丢，不需要启动时占死
+- 退出之后整片内存都是我们的，那时肯定拿得到
+- 换地址（A 方案）只是碰运气，换台机器照样可能撞上
+
+**顺带要改的**
+
+那句话应该报真实原因：
+```
+REJECTED: the program window (0x1000000, 8 MiB) is not available
+          pmm_reserve said: <why>
+```
+现在这句"not a registered window"把人往基址错误的方向带，而基址是对的。

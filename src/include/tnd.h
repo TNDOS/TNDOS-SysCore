@@ -135,6 +135,8 @@ int  fat_selftest(void);      /* FATWRITE：建 / 写 / 读回 / 比对 */
 void fat_list(const char *path);   /* 列指定目录；path 为空 = 当前目录 */
 int  fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen);
 int  fat_mkdir(const char *path);
+int  fat_exists(const char *path);
+int  fat_read_alloc(const char *path, void **out, UINTN *outLen);
 int  fat_unlink(const char *path);
 int  fat_rename(const char *from, const char *to);
 int  fat_copy(const char *from, const char *to);

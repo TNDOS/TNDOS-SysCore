@@ -358,8 +358,15 @@ EFI_STATUS vfs_truncate(EFI_FILE_PROTOCOL *f) {
     return s;
 }
 
+static int use_fatfs(void);      /* 定义在后面 */
+
 int vfs_exists(const char *dos) {
     EFI_FILE_PROTOCOL *f = 0;
+    /* **"文件在不在"也走 FatFs。**
+     * tnx_find() 靠这个函数找程序，所以这一步决定了 tree/attrib/fc
+     * 这些外部命令能不能跑起来。之前它走固件，于是屏幕上只有一句
+     * "Bad command or file name" —— 而文件明明在目录里。 */
+    if (use_fatfs()) return fat_exists(dos);
     if (EFI_ERROR(vfs_open(dos, 0, &f)) || !f) return 0;
     f->Close(f);
     return 1;

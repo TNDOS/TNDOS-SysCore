@@ -597,3 +597,44 @@ int fat_copy(const char *from, const char *to) {
     con_puts("  ("); con_u64(total); con_puts(" bytes)\r\n");
     return 0;
 }
+
+int fat_exists(const char *path) {
+    FILINFO fi;
+    char ap[TND_MAX_PATH];
+    if (!gMounted) return 0;
+    to_fatfs_path(path, ap, sizeof(ap));
+    return f_stat(ap, &fi) == FR_OK ? 1 : 0;
+}
+
+/* 读整个文件并分配内存（调用方 kfree）。给 tnx.c 的 read_whole 用 ——
+ * 程序映像必须从 FatFs 读，不能走固件的 EFI_FILE_PROTOCOL。 */
+int fat_read_alloc(const char *path, void **out, UINTN *outLen) {
+    FIL     fi;
+    FILINFO info;
+    FRESULT fr;
+    UINT    br = 0;
+    void   *buf;
+    char    ap[TND_MAX_PATH];
+
+    if (out) *out = 0;
+    if (outLen) *outLen = 0;
+    if (!gMounted || !out || !outLen) return -1;
+
+    to_fatfs_path(path, ap, sizeof(ap));
+    fr = f_stat(ap, &info);
+    if (fr != FR_OK) return (int)fr;
+    if (info.fsize == 0 || info.fsize > (FSIZE_t)TNX_WINDOW_SIZE) return -2;
+
+    buf = kmalloc((UINTN)info.fsize);
+    if (!buf) return -3;
+
+    fr = f_open(&fi, ap, FA_READ);
+    if (fr != FR_OK) { kfree(buf); return (int)fr; }
+    fr = f_read(&fi, buf, (UINT)info.fsize, &br);
+    f_close(&fi);
+    if (fr != FR_OK || br != (UINT)info.fsize) { kfree(buf); return -4; }
+
+    *out = buf;
+    *outLen = (UINTN)br;
+    return 0;
+}
