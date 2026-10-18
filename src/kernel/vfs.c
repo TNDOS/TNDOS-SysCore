@@ -45,6 +45,25 @@ int vfs_init(void) {
     gCurDrive = 'C';
 
     /* ================================================================
+     * **同时把 blk + FatFs 那条路也挂起来。**
+     *
+     * 两套都在：退出之前固件还活着，退出之后只剩 FatFs。
+     * 但**只要 FatFs 挂上了，优先用它** —— 理由很硬：
+     *
+     *   我们自己往盘上写过之后，固件那份 FAT 缓存立刻过期，
+     *   它再被问 "EFITNDOS 里有什么" 时会返回 EFI_MEDIA_CHANGED。
+     *   实测就是这样：fatwrite 成功了，紧接着 dir 就打不开目录。
+     *
+     * 所以从第一个命令开始就走 FatFs，固件那条只做退路。
+     * ================================================================ */
+    {
+        int bi, bn = blk_count();
+        for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        if (fat_ready()) log_puts("[log] vfs: using blk + FatFs (firmware SFS is only a fallback)\r\n");
+        else             log_puts("[log] vfs: no FAT volume on any block device, staying on the firmware SFS\r\n");
+    }
+
+    /* ================================================================
      * **初始目录不能写死成 "\"。**
      *
      * 真机上实测：提示符是 C:\>，而 autoexec.bat 在 \EFI\TNDOS\ 里 ——
@@ -392,6 +411,13 @@ int vfs_dir(const char *dos) {
      *
      * 现在只支持根目录 —— 子目录要沿簇链走，那是下一步。
      * ================================================================ */
+    /* **只要 FatFs 挂上了就走它**，不再等 gBsGone。
+     * 理由见 vfs_init：我们自己写过盘之后，固件那份缓存就过期了。 */
+    if (fat_ready()) {
+        (void)dos;
+        fat_report();
+        return 0;
+    }
     if (gBsGone) {
         int bi, bn = blk_count();
 
