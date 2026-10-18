@@ -242,8 +242,33 @@ void pmm_free_page(UINT64 addr) { pmm_free_pages(addr, 1); }
 /* 这个窗口真的从固件手里拿到了吗。**加载器用它决定敢不敢往那儿写。**
  * 0x1000000 那个程序窗口在 QEMU+OVMF 上实测是**拿不到**的，
  * 而原来的代码写着「固件拒绝也没关系」，照样往里写 —— 那就是在踩固件的内存。 */
+/* **没拿到就再试一次。**
+ *
+ * 启动时 pmm_reserve(0x1000000) 会失败 —— 那块内存此时还在固件手里
+ * （AllocatePages(AllocateAddress) 拿不到）。失败之后 gWinProgOk 被设成 0，
+ * 而这个函数每次都直接返回那个缓存值 —— **哪怕退出 Boot Services 之后
+ * 固件已经没了、内存早就空了，它也永远说 0。**
+ *
+ * 实测就是这么被发现的：exitboot 之后敲 tree，照样
+ *   REJECTED: ImageBase is not a registered window
+ * 而 TREE.TNX 的 ImageBase 就是 0x1000000，完全正确。
+ *
+ * pmm_reserve 自己会处理 gBsGone（退出之后直接返回成功），
+ * 所以这里只需要"再问一次"，不需要动别的。
+ *
+ * 代价：成功的路径上多一次 unlikely 的分支；失败的路径上每次加载
+ * 多一次 AllocatePages 尝试。可以接受。 */
 int pmm_window_ok(UINT64 base) {
-    if (base == TNX_PROG_BASE)   return gWinProgOk;
+    if (base == TNX_PROG_BASE) {
+        if (!gWinProgOk) {
+            gWinProgOk = pmm_reserve(TNX_PROG_BASE,
+                (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
+            log_puts("[log] pmm: retried the program window -> ");
+            log_puts(gWinProgOk ? "OK" : "still not ours");
+            log_puts(gBsGone ? "  (boot services are gone)\r\n" : "  (firmware still owns it)\r\n");
+        }
+        return gWinProgOk;
+    }
     if (base == TNX_DRIVER_BASE) return gWinDrvOk;
     return 0;
 }
