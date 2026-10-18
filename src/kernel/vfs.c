@@ -412,8 +412,19 @@ int vfs_dir(const char *dos) {
      *
      * 现在只支持根目录 —— 子目录要沿簇链走，那是下一步。
      * ================================================================ */
-    /* **只要 FatFs 挂上了就走它**，不再等 gBsGone。
-     * 理由见 vfs_init：我们自己写过盘之后，固件那份缓存就过期了。 */
+    /* **只要 FatFs 能挂上就走它。**
+     *
+     * 这里必须**再试一次挂载** —— 不能只靠 vfs_init。实测过：
+     * 开机后第一次 dir 报 EFI_MEDIA_CHANGED，第二次就正常了。
+     * 原因是 vfs_init 跑的时候驱动还没加载，blk_count() 是 0，
+     * 那一挂不可能成功；之后再没有别的地方试过。
+     *
+     * 所以每次进来都问一句"挂上了吗，没挂就再试" —— blk 是幂等的，
+     * 重复尝试的代价只是几次扇区读。 */
+    if (!fat_ready()) {
+        int bi, bn = blk_count();
+        for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+    }
     if (fat_ready()) {
         (void)dos;
         fat_report();

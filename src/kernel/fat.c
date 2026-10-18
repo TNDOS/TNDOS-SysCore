@@ -256,16 +256,82 @@ int fat_selftest(void) {
     return same;
 }
 
+/* 列目录的输出格式 —— 按 DOS 的样子来，不要中间那些调试信息。
+ *
+ * 原来的开头是：
+ *   === directory listing, read through blk + FatFs (no firmware) ===
+ *   volume starts at LBA 0
+ * 那两行对我们有用，对看屏幕的人没用。DOS 的 dir 第一行是卷标和目录名，
+ * 最后一行是统计。**把调试信息让到串口去，屏幕上只留人要看的东西。** */
 void fat_report(void) {
+    DIR   dir;
+    FILINFO fi;
+    FRESULT fr;
+    int   nDir = 0, nFile = 0;
+    UINT64 bytes = 0;
+    UINTN  col;
+
     if (!gMounted) {
         con_puts("  no FAT volume mounted\r\n");
         return;
     }
 
-    con_puts("\r\n  === directory listing, read through blk + FatFs (no firmware) ===\r\n");
-    con_puts("  volume starts at LBA ");
-    con_u64(gFatVolBase);
-    con_puts("\r\n\r\n");
+    log_puts("[log] fat: listing, volume base LBA ");
+    log_u64(gFatVolBase);
+    log_puts("\r\n");
 
-    (void)list_dir("/");
+    con_puts("\r\n Volume in drive C\r\n");
+    con_puts(" Directory of C:\\\r\n\r\n");
+
+    fr = f_opendir(&dir, "/");
+    if (fr != FR_OK) {
+        con_puts("  cannot open directory, FRESULT=");
+        con_u64((UINT64)fr);
+        con_puts("\r\n\r\n");
+        return;
+    }
+
+    /* 先列子目录，再列文件 —— DOS 就是这么排的 */
+    for (;;) {
+        fr = f_readdir(&dir, &fi);
+        if (fr != FR_OK || fi.fname[0] == 0) break;
+        if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
+        if (!(fi.fattrib & AM_DIR)) continue;
+
+        con_puts("  ");
+        con_puts(fi.fname);
+        col = 2 + t_strlen(fi.fname);
+        while (col < 34) { con_putc(' '); col++; }
+        con_puts("<DIR>\r\n");
+        nDir++;
+    }
+    f_closedir(&dir);
+
+    fr = f_opendir(&dir, "/");
+    if (fr == FR_OK) {
+        for (;;) {
+            fr = f_readdir(&dir, &fi);
+            if (fr != FR_OK || fi.fname[0] == 0) break;
+            if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
+            if (fi.fattrib & AM_DIR) continue;
+
+            con_puts("  ");
+            con_puts(fi.fname);
+            col = 2 + t_strlen(fi.fname);
+            while (col < 34) { con_putc(' '); col++; }
+            con_u64((UINT64)fi.fsize);
+            con_puts("\r\n");
+            nFile++;
+            bytes += (UINT64)fi.fsize;
+        }
+        f_closedir(&dir);
+    }
+
+    con_puts("\r\n");
+    con_puts("  "); con_u64((UINT64)nFile);
+    con_puts(" file(s)   ");
+    con_u64(bytes);
+    con_puts(" bytes\r\n");
+    con_puts("  "); con_u64((UINT64)nDir);
+    con_puts(" dir(s)\r\n\r\n");
 }
