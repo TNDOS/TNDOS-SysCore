@@ -367,6 +367,76 @@ void shell_exec_line(char *line) {
      * 这是为了验证 DisconnectController 真的生效 —— 摘完之后固件的驱动
      * 不该再碰那个设备（用 USB 的 QEMU trace 看得到）。 */
     /* ==================================================================
+     * **FSINFO —— 把每个探测点的引导扇区解出来。**
+     *
+     * 用途只有一个：区分「盘上真的没文件」和「我读错了地方」。
+     * 引导扇区里直接写着文件系统的全部关键参数，比任何猜测都硬：
+     *
+     *   偏移 11  每扇区字节数       512 还是 4096
+     *   偏移 13  每簇扇区数
+     *   偏移 17  根目录项数         **FAT32 这里是 0**
+     *   偏移 22  每 FAT 扇区数      **FAT32 这里也是 0**
+     *   偏移 54  文件系统类型串     "FAT16" / "FAT32" / "EXFAT"
+     *
+     * **FAT32 的两个关键字段都是 0。** 而我只认 FAT16 —— 所以看到 0
+     * 就意味着"文件系统不是我能读的那种"，而不是"盘坏了"。
+     * 这两个结论要赔上的东西天差地别，必须先分清。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "FSINFO")) {
+        static const UINT64 probe2[] = { 0, 1, 63, 2048 };
+        static UINT8 sec[512];
+        int nb = blk_count(), bi;
+        unsigned k;
+
+        con_puts("\r\n  block devices: ");
+        con_u64((UINT64)nb);
+        con_puts("\r\n");
+        for (bi = 0; bi < nb; bi++) {
+            const TND_BLOCK *b = blk_at(bi);
+            con_puts("  --- ");
+            con_puts(b && b->Name ? b->Name : "?");
+            con_puts(" ---\r\n");
+            for (k = 0; k < sizeof(probe2) / sizeof(probe2[0]); k++) {
+                UINT64 lba = probe2[k];
+                UINT32 bps, spc, rootEnt, fatsz, total;
+                char fs[9];
+                int j;
+
+                con_puts("    LBA ");
+                con_u64(lba);
+                con_puts(" : ");
+                if (blk_read(bi, lba, 1, sec) != 0) { con_puts("read failed\r\n"); continue; }
+                if (!(sec[0] == 0xEB || sec[0] == 0xE9) || sec[510] != 0x55 || sec[511] != 0xAA) {
+                    con_puts("no 55AA signature -- not a FAT volume at this LBA\r\n");
+                    continue;
+                }
+                bps     = (UINT32)sec[11] | ((UINT32)sec[12] << 8);
+                spc     = (UINT32)sec[13];
+                rootEnt = (UINT32)sec[17] | ((UINT32)sec[18] << 8);
+                fatsz   = (UINT32)sec[22] | ((UINT32)sec[23] << 8);
+                total   = (UINT32)sec[19] | ((UINT32)sec[20] << 8);
+                if (!total) total = (UINT32)sec[32] | ((UINT32)sec[33] << 8)
+                                  | ((UINT32)sec[34] << 16) | ((UINT32)sec[35] << 24);
+                for (j = 0; j < 8; j++) fs[j] = (char)sec[54 + j];
+                fs[8] = 0;
+
+                con_puts("bytes/sec="); con_u64((UINT64)bps);
+                con_puts("  spc=");     con_u64((UINT64)spc);
+                con_puts("  rootEnt="); con_u64((UINT64)rootEnt);
+                con_puts("  fatsz=");   con_u64((UINT64)fatsz);
+                con_puts("  total=");   con_u64((UINT64)total);
+                con_puts("\r\n      type=\"");
+                for (j = 0; j < 8 && fs[j]; j++) con_putc(fs[j]);
+                con_puts("\"");
+                if (fatsz == 0 || rootEnt == 0) con_puts("   ** this is FAT32 -- I only read FAT16 **");
+                con_puts("\r\n");
+            }
+        }
+        con_puts("\r\n");
+        return;
+    }
+
+    /* ==================================================================
      * **FATDIR —— 用我们自己的块设备 + 我们自己的 FAT 列目录。**
      *
      * 和 DIR 的区别就是这件事的全部意义：
