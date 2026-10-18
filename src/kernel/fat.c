@@ -195,6 +195,67 @@ static int list_dir(const char *path) {
     return 1;
 }
 
+/* ============================================================================
+ * fat_selftest —— 读写自检
+ *
+ * 建文件 -> 写 -> 关 -> 重开读回 -> 逐字节比对 -> 再列一次目录。
+ *
+ * 为什么要有这一条：读通路（dir 能列）和写通路（命令能下去）各自"看起来通了"
+ * 不等于拼起来能用。只有"写进去、读回来、一模一样"才算数。
+ *
+ * **只写这一个文件名**（/TNDTEST.TXT），而且每次都 CREATE_ALWAYS ——
+ * 万一在真机上误跑，也只有一个文件会被覆盖。 */
+int fat_selftest(void) {
+    FIL   f;
+    FRESULT fr;
+    UINT  bw = 0, br = 0;
+    static const char kMsg[] = "TNDDOS write test: hello from our own driver stack.\r\n";
+    char  rd[128];
+    UINTN i, n;
+    int   same = 1;
+
+    if (!gMounted) { con_puts("  FATWRITE: no volume mounted\r\n"); return 0; }
+
+    con_puts("\r\n  [FATWRITE] create + write + read back + compare\r\n");
+
+    fr = f_open(&f, "/TNDTEST.TXT", FA_CREATE_ALWAYS | FA_WRITE);
+    if (fr != FR_OK) { con_puts("  f_open(create) FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return 0; }
+    con_puts("  1 create              OK\r\n");
+
+    n = (UINTN)t_strlen(kMsg);
+    fr = f_write(&f, kMsg, (UINT)n, &bw);
+    if (fr != FR_OK || bw != n) {
+        con_puts("  f_write FRESULT="); con_u64((UINT64)fr);
+        con_puts(" wrote="); con_u64((UINT64)bw); con_puts("/"); con_u64((UINT64)n); con_puts("\r\n");
+        f_close(&f);
+        return 0;
+    }
+    con_puts("  2 write               "); con_u64((UINT64)bw); con_puts(" bytes\r\n");
+
+    fr = f_close(&f);
+    if (fr != FR_OK) { con_puts("  f_close FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return 0; }
+    con_puts("  3 close               OK\r\n");
+
+    fr = f_open(&f, "/TNDTEST.TXT", FA_READ);
+    if (fr != FR_OK) { con_puts("  f_open(read) FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return 0; }
+    fr = f_read(&f, rd, sizeof(rd) - 1, &br);
+    f_close(&f);
+    if (fr != FR_OK) { con_puts("  f_read FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return 0; }
+    con_puts("  4 read back           "); con_u64((UINT64)br); con_puts(" bytes\r\n");
+
+    if (br != n) same = 0;
+    else for (i = 0; i < n; i++) if (rd[i] != kMsg[i]) { same = 0; break; }
+
+    con_puts("  5 compare             ");
+    con_puts(same ? "** MATCH **\r\n" : "** MISMATCH **\r\n");
+
+    /* 最后再列一次目录 —— 确认这个文件真的进了文件系统，而不是只在缓存里 */
+    con_puts("  6 directory now:\r\n");
+    (void)list_dir("/");
+
+    return same;
+}
+
 void fat_report(void) {
     if (!gMounted) {
         con_puts("  no FAT volume mounted\r\n");

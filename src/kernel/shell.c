@@ -481,6 +481,24 @@ void shell_exec_line(char *line) {
      *
      * 所以在 exitboot 之后敲这条，看到的就是"我们真的接手了"的证据。
      * ================================================================== */
+    /* ==================================================================
+     * **FATWRITE —— 读写自检。**
+     *
+     * 读通路能列目录、写通路能下命令，**都不等于拼起来能用**。
+     * 只有"写进去、读回来、一模一样"才算数。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "FATWRITE")) {
+        int ok;
+        if (!fat_ready()) {
+            int bi, bn = blk_count();
+            for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        }
+        ok = fat_selftest();
+        con_puts(ok ? "\r\n  RESULT: WRITE PATH OK\r\n\r\n"
+                    : "\r\n  RESULT: ** WRITE PATH FAILED **\r\n\r\n");
+        return;
+    }
+
     if (!t_stricmp(cmd, "FATDIR")) {
         int n = blk_count(), i, got = 0;
         con_puts("\r\n  block devices:\r\n");

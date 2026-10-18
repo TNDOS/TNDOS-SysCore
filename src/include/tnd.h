@@ -131,6 +131,7 @@ int                blk_write(int idx, UINT64 lba, UINT32 count, const void *buf)
  * 在块设备上找一个 FAT 卷并读它。**不依赖任何固件服务。** */
 int  fat_mount(int blkIdx);
 void fat_report(void);        /* 把根目录列出来 */
+int  fat_selftest(void);      /* FATWRITE：建 / 写 / 读回 / 比对 */
 int  fat_ready(void);
 int  drv_init(void);
 EFI_STATUS drv_load(const char *path);
