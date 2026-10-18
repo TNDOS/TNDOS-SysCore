@@ -15,6 +15,7 @@
  * ==========================================================================*/
 #include "tnd.h"
 #include "tnd_api.h"
+#include "ff.h"      /* 目录遍历走 FatFs —— 退出之后固件的 SFS 已经不可用了 */
 
 #define TND_MAX_FDS 16
 
@@ -244,6 +245,22 @@ static TND_ABI int api_stat(const char *path, TND_STAT *st) {
 }
 
 /* --------------------------------------------------------- 目录遍历 */
+/* **FatFs 挂上之后，一次性把整个目录读进内存，再从内存里发。**
+ *
+ * 原来这条路上每一步都问固件的 EFI_FILE_PROTOCOL，而退出 Boot Services
+ * 之后固件已经没了 —— 症状是 tree 能跑起来却打印
+ *   Directory tree: .
+ *   0 dir(s), 0 file(s)
+ * 也就是"命令成功、结果为空"，最难看出来的一种坏法。
+ *
+ * 一次读完的好处：不需要维护一个 DIR 句柄的生命周期，
+ * 也不会出现"列到一半状态跑了"。上限 256 条，够用。 */
+#define FIND_LIST_MAX 256
+static TND_FIND gFindList[FIND_LIST_MAX];
+static int      gFindCount = 0;
+static int      gFindIdx   = 0;
+static int      gFindFd    = -1;
+
 static TND_ABI int api_findnext(int fh, TND_FIND *out);
 
 static TND_ABI int api_findfirst(const char *pattern, TND_FIND *out) {
@@ -267,6 +284,45 @@ static TND_ABI int api_findfirst(const char *pattern, TND_FIND *out) {
     }
     if (!pat[0]) t_strncpy(pat, "*", sizeof(pat));
 
+    /* **FatFs 优先。** 见上面那段注释。 */
+    if (fat_ready()) {
+        DIR     dh;
+        FILINFO fi;
+        char    ap[TND_MAX_PATH];
+        int     n = 0;
+
+        fat_resolve(dir, ap, sizeof(ap));
+        if (f_opendir(&dh, ap) == FR_OK) {
+            for (;;) {
+                if (f_readdir(&dh, &fi) != FR_OK || fi.fname[0] == 0) break;
+                if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
+                if (n >= FIND_LIST_MAX) break;
+                {
+                    UINTN i;
+                    for (i = 0; fi.fname[i] && i < TND_NAME_MAX - 1; i++) {
+                        char c = fi.fname[i];
+                        gFindList[n].Name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+                    }
+                    gFindList[n].Name[i] = 0;
+                }
+                if (!wild_match(pat, gFindList[n].Name)) continue;
+                gFindList[n].Size = (tnd_u32)fi.fsize;
+                gFindList[n].Attr = (fi.fattrib & AM_DIR) ? TND_ATTR_DIR : 0;
+                gFindList[n].Reserved = 0;
+                n++;
+            }
+            f_closedir(&dh);
+        }
+        gFindCount = n;
+        gFindIdx = 0;
+        gFindFd = fd_alloc();
+        if (gFindFd < 0) return -1;
+        gFd[gFindFd].kind = FD_DIR;
+        gFd[gFindFd].f = 0;              /* 没有 EFI 句柄，靠 gFindList */
+        if (api_findnext(gFindFd, out) != 0) { fd_reset(gFindFd); gFindFd = -1; return -1; }
+        return gFindFd;
+    }
+
     if (EFI_ERROR(vfs_open(dir, 0, &f)) || !f) return -1;
 
     fd = fd_alloc();
@@ -287,7 +343,14 @@ static TND_ABI int api_findnext(int fh, TND_FIND *out) {
     TND_FD *e;
     if (fh < 0 || fh >= TND_MAX_FDS || !out) return -1;
     e = &gFd[fh];
-    if (e->kind != FD_DIR || !e->f) return -1;
+    if (e->kind != FD_DIR) return -1;
+
+    /* FatFs 那条路：条目在 gFindList 里，没有 EFI 句柄 */
+    if (!e->f) {
+        if (fh != gFindFd || gFindIdx >= gFindCount) return -1;
+        *out = gFindList[gFindIdx++];
+        return 0;
+    }
 
     for (;;) {
         EFI_FILE_INFO *fi;

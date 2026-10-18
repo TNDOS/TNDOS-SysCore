@@ -495,6 +495,10 @@ static void to_fatfs_path(const char *in, char *out, UINTN cap) {
     out[j] = 0;
 }
 
+/* 公开包装：api.c 的目录遍历要用同一个转换规则。
+ * **不要在调用方再写一遍** —— 两处规则不一致是这类 bug 的温床。 */
+void fat_resolve(const char *in, char *out, UINTN cap) { to_fatfs_path(in, out, cap); }
+
 int fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen) {
     FIL    fil;
     FRESULT fr;

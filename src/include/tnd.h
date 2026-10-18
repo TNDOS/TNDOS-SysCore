@@ -137,6 +137,7 @@ int  fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen);
 int  fat_mkdir(const char *path);
 int  fat_exists(const char *path);
 int  fat_read_alloc(const char *path, void **out, UINTN *outLen);
+void fat_resolve(const char *in, char *out, UINTN cap);   /* DOS 路径 -> FatFs 路径 */
 int  fat_unlink(const char *path);
 int  fat_rename(const char *from, const char *to);
 int  fat_copy(const char *from, const char *to);
