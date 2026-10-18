@@ -1,6 +1,18 @@
 /* ============================================================================
- * TNDDOS — ESP 文件访问
- * 现阶段完全借 UEFI Simple File System Protocol（符合"不早退 UEFI"的决定）
+ * TNDDOS —— ESP 文件访问
+ *
+ * **整个文件都是过渡期代码。**
+ *
+ * 这里完全借 UEFI 的 SimpleFileSystem 来读文件 —— 而它的生死由固件决定：
+ * ExitBootServices 之后这套协议连同代码一起消失。
+ *
+ * 所以它的每一处调用都标了 TND-TRANSITIONAL。去掉的条件写在每个标记后面，
+ * 全部是同一件事：**VFS 完全走 blk + FatFs，不再有固件路径**。
+ *
+ * 到那时这个文件整个删掉。它不需要被改造成别的东西 —— 它本来就该消失。
+ *
+ * 数一下有多少：
+ *     grep -c TND-TRANSITIONAL src/lib/file.c
  * ==========================================================================*/
 #include "tnd.h"
 
@@ -13,6 +25,8 @@ EFI_STATUS t_open_root(EFI_HANDLE image) {
     EFI_FILE_PROTOCOL *root = 0;
     EFI_STATUS s;
 
+    /* TND-TRANSITIONAL: 用 HandleProtocol 找 LoadedImage 拿 ESP 的设备句柄。
+     * 去掉的条件：内核有自己加载映像的能力（TNX 加载器 + 自己的设备表）。 */
     s = gEnv.BS->HandleProtocol(image, &gEfiLoadedImageProtocolGuid, (void **)&li);
     if (EFI_ERROR(s) || !li) { log_kv("LoadedImage", "HandleProtocol FAILED"); return s; }
 
@@ -28,6 +42,8 @@ EFI_STATUS t_open_root(EFI_HANDLE image) {
 
     if (!li->DeviceHandle) { log_kv("SFS", "DeviceHandle is NULL"); return EFI_NOT_FOUND; }
 
+    /* TND-TRANSITIONAL: 用 HandleProtocol 找 SimpleFileSystem。
+     * 去掉的条件：换成 blk 层 —— 驱动注册块设备，我们自己解析分区和文件系统。 */
     s = gEnv.BS->HandleProtocol(li->DeviceHandle, &gEfiSimpleFileSystemProtocolGuid, (void **)&sfs);
     if (EFI_ERROR(s) || !sfs) { log_kv("SimpleFileSystem", "HandleProtocol FAILED"); return s; }
 
@@ -69,6 +85,8 @@ EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen) {
         log_puts(" open "); log_puts(name); log_puts("\r\n");
     }
 
+    /* TND-TRANSITIONAL: 用固件的文件协议打开文件。
+     * 去掉的条件：FatFs 接管 —— f_open 替代这一句。 */
     s = gEnv.Root->Open(gEnv.Root, &f, wname, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(s) || !f) {
         log_puts("[log] file# open FAILED: "); log_puts(name);
