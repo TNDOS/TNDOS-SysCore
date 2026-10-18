@@ -1,110 +1,54 @@
 /* ============================================================================
- * fat —— FAT16 读取（**完全不碰固件**）
+ * fat —— 文件系统层（**现在是 FatFs 的外壳**）
  *
- * 在这之前，内核里一切「文件」都是固件的 SimpleFileSystem 给的。
- * ExitBootServices 之后它没了，于是 DIR / TYPE / 跑程序全都没了。
+ * 历史：这一层原来是自己写的 FAT16 读取器。
+ * 它证明了"驱动读扇区 -> blk -> 文件系统"这条链是通的，但只认 FAT16 —
+ * 而真机的 ESP 是 FAT32，所以一上真机就"目录全无"。
  *
- * 这一层加上 blk 层，就是把那条路接回来：**驱动读扇区 -> blk -> fat**。
+ * 现在换成 FatFs R0.16（BSD 风格，见 docs/THIRD-PARTY.md）：
+ *   · FAT12/16/32 全支持
+ *   · 子目录和 f_chdir/f_getcwd 都有（用户要求 cd 不能被拦）
+ *   · ff.c 一个字未改；接合层在 fatfs_glue.c
  *
- * 现在只做 **FAT16**，因为 ESP 就是 mkfat.ps1 生成的 FAT16。
- * FAT32 的结构差在根目录（一条簇链而不是固定区）和 FAT 项宽度，
- * 后面补的时候是加分支，不是重写。
+ * **保留的**：找卷起点的那段（GPT / MBR / 探测）。
+ * FatFs 挂的是"驱动器"，而我们挂的是 GPT 分区 ——
+ * FatFs 的 FF_MULTI_PARTITION 只认 MBR，GPT 盘上它看到的是保护性 MBR，
+ * 用不了。所以起点由这里找出来，写进 gFatVolBase，胶水层的 disk_read 会加上它。
  *
- * 挂载点靠**探测**：esp.img 里的文件系统不在 LBA 0，前面 1 MiB 是空的
- * （文件系统从 LBA 2048 开始）。发一个真实 GPT/MBR 分区表才行，
- * 但那是另一件事 —— 现在依次试几个常见起点，认得出就认。
+ * 对外接口不变：fat_ready / fat_mount / fat_report。上层一行都不用改。
  * ==========================================================================*/
 #include "tnd.h"
+#include "ff.h"
+#include "fatfs_tnd.h"      /* 只为了 gFatVolBase 的声明 */
 
-#define FAT16 16
+static FATFS gFs;
+static int   gMounted = 0;
 
-typedef struct {
-    int    blk;
-    UINT64 base;        /* 卷起始 LBA */
-    UINT32 spc;         /* 每簇扇区数 */
-    UINT32 rsvd;        /* 保留扇区 */
-    UINT32 nfats;
-    UINT32 rootEnt;     /* 根目录项数 */
-    UINT32 fatsz;       /* 每 FAT 的扇区数 */
-    UINT32 rootSecs;    /* 根目录占几个扇区 */
-    UINT32 total;       /* 总扇区数 */
-    UINT64 fatLba;
-    UINT64 rootLba;
-    UINT64 dataLba;
-} FAT_VOL;
+static int fat_init(void) { gMounted = 0; return 1; }
 
-static FAT_VOL gV;
-static int     gOk;
-static UINT8   gSec[512];
-static int     fat_init(void) { gOk = 0; return 1; }
+const TND_MODULE_DEF gModFat = { "fat", "FatFs R0.16 over blk (no firmware)", fat_init };
 
-const TND_MODULE_DEF gModFat = { "fat", "FAT16 reader over blk (no firmware)", fat_init };
+int fat_ready(void) { return gMounted; }
 
-int fat_ready(void) { return gOk; }
-
-static UINT32 u16(const UINT8 *p) { return (UINT32)p[0] | ((UINT32)p[1] << 8); }
-static UINT32 u32(const UINT8 *p) {
-    return (UINT32)p[0] | ((UINT32)p[1] << 8) | ((UINT32)p[2] << 16) | ((UINT32)p[3] << 24);
-}
-
-/* 试一个起点。成功返回 1。 */
-static int try_mount(int blk, UINT64 base) {
-    const UINT8 *b = gSec;
-    UINT32 rootSecs;
-
-    if (blk_read(blk, base, 1, gSec) != 0) return 0;
-
-    /* 引导扇区的硬指纹：跳转指令 + 结束标记 55 AA */
-    if (!(b[0] == 0xEB || b[0] == 0xE9)) return 0;
-    if (b[510] != 0x55 || b[511] != 0xAA) return 0;
-    if (u16(b + 11) != 512) return 0;                 /* 每扇区字节数 */
-    if (b[13] == 0 || b[16] == 0) return 0;           /* 每簇扇区数 / FAT 个数 */
-
-    gV.blk     = blk;
-    gV.base    = base;
-    gV.spc     = b[13];
-    gV.rsvd    = u16(b + 14);
-    gV.nfats   = b[16];
-    gV.rootEnt = u16(b + 17);
-    gV.total   = u16(b + 19);
-    if (!gV.total) gV.total = u32(b + 32);
-    gV.fatsz   = u16(b + 22);
-    if (!gV.fatsz) return 0;                          /* 0 就是 FAT32 —— 这一版不认 */
-
-    rootSecs   = (gV.rootEnt * 32 + 511) / 512;
-    gV.rootSecs = rootSecs;
-    gV.fatLba   = base + gV.rsvd;
-    gV.rootLba  = gV.fatLba + (UINT64)gV.nfats * gV.fatsz;
-    gV.dataLba  = gV.rootLba + rootSecs;
-
-    /* 合理性：数据区得在卷内 */
-    if (gV.dataLba >= base + gV.total) return 0;
-    return 1;
-}
-
-/* ============================================================================
- * 从分区表找 EFI System Partition 的起始 LBA
+/* ------------------------------------------------------------ 卷起点
  *
- * **为什么不能靠猜。** 原来是 probe[] = {0, 2048, 63, 1} —— 顶上的注释里
- * 自己也写着"发一个真实 GPT/MBR 分区表才行"。猜的后果很坏：
- * QEMU 里那个 esp.img 恰好从 2048 开始，所以能挂上；真机上 ESP 的起点
- * 是分区表说了算，猜不中就挂不上 —— 而症状只是"根目录列不出来"，
- * 完全看不出是起点找错了。
- *
- * 顺序：GPT -> MBR -> 最后才退回探测（esp.img 那种裸文件系统用得上）。
- * ==========================================================================*/
+ * 为什么不能靠猜：原来这里是 probe[] = {0, 2048, 63, 1}，
+ * QEMU 里那个 esp.img 恰好从 2048 开始所以能挂上；
+ * 真机上 ESP 的起点由分区表决定，猜不中就挂不上 ——
+ * 而症状只是"根目录列不出来"，完全看不出是起点找错了。
+ * 顺序：GPT -> MBR -> 最后才退回探测。 */
 static UINT32 rd32(const UINT8 *p) {
     return (UINT32)p[0] | ((UINT32)p[1] << 8) | ((UINT32)p[2] << 16) | ((UINT32)p[3] << 24);
 }
 static UINT64 rd64(const UINT8 *p) {
     return (UINT64)rd32(p) | ((UINT64)rd32(p + 4) << 32);
 }
-static int  eq16(const UINT8 *a, const UINT8 *b) {
+static int eq16(const UINT8 *a, const UINT8 *b) {
     for (int i = 0; i < 16; i++) if (a[i] != b[i]) return 0;
     return 1;
 }
 
-/* GPT 磁盘上 EFI System Partition 的类型 GUID（磁盘上的字节序）。 */
+/* GPT 磁盘上 EFI System Partition 的类型 GUID（磁盘字节序） */
 static const UINT8 kEspGuid[16] = {
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
     0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B
@@ -139,7 +83,6 @@ static UINT64 find_esp_gpt(int blkIdx) {
     return 0;
 }
 
-/* MBR 上的 FAT / ESP 分区（老机器、U 盘）。 */
 static UINT64 find_fat_mbr(int blkIdx) {
     static UINT8 mbr[512];
     int i;
@@ -156,90 +99,112 @@ static UINT64 find_fat_mbr(int blkIdx) {
     return 0;
 }
 
-static int mount_at(int blkIdx, UINT64 lba, const char *how) {
-    if (!try_mount(blkIdx, lba)) return 0;
-    gOk = 1;
+/* 试一个起点：设好卷基址，让 FatFs 挂一次试试 */
+static int try_mount_at(int blkIdx, UINT64 lba, const char *how) {
+    FRESULT fr;
+
+    gFatVolBase = lba;
+    fr = f_mount(&gFs, "0:", 1);
+    if (fr != FR_OK) {
+        f_mount(0, "0:", 0);
+        return 0;
+    }
+    gMounted = 1;
     log_puts("[log] fat: mounted on blk "); log_u64((UINT64)blkIdx);
-    log_puts(" at LBA "); log_u64(gV.base);
-    log_puts(" (via "); log_puts(how); log_puts(")");
-    log_puts("  clusters spc="); log_u64(gV.spc);
-    log_puts("\r\n");
+    log_puts(" at LBA "); log_u64(lba);
+    log_puts(" (via "); log_puts(how); log_puts(")  FatFs\r\n");
     return 1;
 }
 
-/* 在某个块设备上找 FAT16 卷。**先信分区表，最后才退回探测。** */
 int fat_mount(int blkIdx) {
     static const UINT64 probe[] = { 0, 2048, 63, 1 };
     UINT64 start;
-    int i;
+    unsigned i;
 
-    gOk = 0;
+    gMounted = 0;
     if (!blk_at(blkIdx)) return 0;
 
     start = find_esp_gpt(blkIdx);
     if (start) {
         log_puts("[log] fat: GPT says the ESP starts at LBA "); log_u64(start); log_puts("\r\n");
-        if (mount_at(blkIdx, start, "GPT")) return 1;
+        if (try_mount_at(blkIdx, start, "GPT")) return 1;
     }
     start = find_fat_mbr(blkIdx);
     if (start) {
         log_puts("[log] fat: MBR says a FAT partition starts at LBA "); log_u64(start); log_puts("\r\n");
-        if (mount_at(blkIdx, start, "MBR")) return 1;
+        if (try_mount_at(blkIdx, start, "MBR")) return 1;
     }
-
-    /* 退路：没有分区表的裸文件系统（esp.img 就是这种）。 */
-    for (i = 0; i < (int)(sizeof(probe) / sizeof(probe[0])); i++) {
-        if (mount_at(blkIdx, probe[i], "probe")) return 1;
+    for (i = 0; i < sizeof(probe) / sizeof(probe[0]); i++) {
+        if (try_mount_at(blkIdx, probe[i], "probe")) return 1;
     }
-    log_puts("[log] fat: no FAT16 volume found (no GPT, no MBR, no probe hit)\r\n");
+    log_puts("[log] fat: no FAT volume found (no GPT, no MBR, no probe hit)\r\n");
     return 0;
 }
 
-/* 8.3 名字打出来：8 字节主名（去尾空格）+ '.' + 3 字节扩展名 */
-static void print_name(const UINT8 *e) {
-    int i, last = -1;
-    for (i = 0; i < 8; i++) if (e[i] != ' ') last = i;
-    for (i = 0; i <= last; i++) con_putc((char)e[i]);
-    last = -1;
-    for (i = 8; i < 11; i++) if (e[i] != ' ') last = i;
-    if (last >= 8) { con_putc('.'); for (i = 8; i <= last; i++) con_putc((char)e[i]); }
-}
+/* ------------------------------------------------------------ 列目录
+ *
+ * 用 f_opendir / f_readdir。**先列子目录再列文件** —— DOS 的 dir 就是这么排的，
+ * 而且这样一眼能看出层级。 */
+static int list_dir(const char *path) {
+    DIR dir;
+    FILINFO fi;
+    FRESULT fr;
+    int nDir = 0, nFile = 0;
+    UINT64 bytes = 0;
 
-/* 把根目录列出来。**这一条走的是 blk + fat，一颗固件服务都不碰。** */
-void fat_report(void) {
-    UINT32 s, i;
-    int n = 0;
+    fr = f_opendir(&dir, path);
+    if (fr != FR_OK) {
+        con_puts("  cannot open directory, FRESULT=");
+        con_u64((UINT64)fr);
+        con_puts("\r\n");
+        return 0;
+    }
 
-    if (!gOk) { con_puts("  no FAT volume mounted\r\n"); return; }
+    for (;;) {
+        UINT64 sz;
+        fr = f_readdir(&dir, &fi);
+        if (fr != FR_OK || fi.fname[0] == 0) break;
+        if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
 
-    con_puts("\r\n  === root directory, read through blk + fat (no firmware) ===\r\n");
-    con_puts("  volume starts at LBA ");
-    con_u64(gV.base);
-    con_puts(",   ");
-    con_u64(gV.total);
-    con_puts(" sectors\r\n\r\n");
-
-    for (s = 0; s < gV.rootSecs; s++) {
-        if (blk_read(gV.blk, gV.rootLba + s, 1, gSec) != 0) { con_puts("  read error\r\n"); return; }
-        for (i = 0; i < 16; i++) {
-            const UINT8 *e = gSec + i * 32;
-            if (e[0] == 0x00) goto done;              /* 后面全空 */
-            if (e[0] == 0xE5) continue;               /* 已删除 */
-            if (e[11] == 0x0F) continue;              /* 长文件名项，先跳过 */
-            if (e[11] & 0x08) continue;               /* 卷标 */
-
-            con_puts("  ");
-            print_name(e);
-            if (e[11] & 0x10) con_puts("   <DIR>");
-            else              { con_puts("   "); con_u64(u32(e + 28)); }
+        con_puts("  ");
+        con_puts(fi.fname);
+        if (fi.fattrib & AM_DIR) {
+            con_puts("   <DIR>\r\n");
+            nDir++;
+        } else {
+            /* 右对齐到第 34 列，像 DOS 那样好读 */
+            UINTN len = t_strlen(fi.fname);
+            UINTN col = 2 + len;
+            while (col < 34) { con_putc(' '); col++; }
+            sz = (UINT64)fi.fsize;
+            con_u64(sz);
             con_puts("\r\n");
-            n++;
+            nFile++;
+            bytes += sz;
         }
     }
-done:
+    f_closedir(&dir);
+
     con_puts("\r\n  ");
-    con_u64((UINT64)n);
-    con_puts(" entr");
-    con_puts(n == 1 ? "y" : "ies");
-    con_puts(", read with our own driver stack\r\n");
+    con_u64((UINT64)nFile);
+    con_puts(" file(s)   ");
+    con_u64(bytes);
+    con_puts(" bytes   ");
+    con_u64((UINT64)nDir);
+    con_puts(" dir(s)\r\n");
+    return 1;
+}
+
+void fat_report(void) {
+    if (!gMounted) {
+        con_puts("  no FAT volume mounted\r\n");
+        return;
+    }
+
+    con_puts("\r\n  === directory listing, read through blk + FatFs (no firmware) ===\r\n");
+    con_puts("  volume starts at LBA ");
+    con_u64(gFatVolBase);
+    con_puts("\r\n\r\n");
+
+    (void)list_dir("/");
 }
