@@ -40,6 +40,14 @@ int blk_count(void) { return gBlkCount; }
 
 const TND_BLOCK *blk_at(int i) { return (i >= 0 && i < gBlkCount) ? gBlk[i] : 0; }
 
+int blk_write(int idx, UINT64 lba, UINT32 count, const void *buf) {
+    const TND_BLOCK *b = blk_at(idx);
+    if (!b || !buf || !count) return -1;
+    if (!b->Write) return -4;                                        /* 只读设备 */
+    if (b->Sectors && lba + (UINT64)count > b->Sectors) return -2;
+    return b->Write(lba, count, buf) == 0 ? 0 : -3;
+}
+
 int blk_read(int idx, UINT64 lba, UINT32 count, void *buf) {
     const TND_BLOCK *b = blk_at(idx);
     if (!b || !buf || !count) return -1;

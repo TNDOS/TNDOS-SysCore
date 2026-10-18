@@ -125,6 +125,7 @@ int                blk_register(const TND_BLOCK *b);   /* API 那边转发到这
 int                blk_count(void);
 const TND_BLOCK   *blk_at(int i);
 int                blk_read(int idx, UINT64 lba, UINT32 count, void *buf);
+int                blk_write(int idx, UINT64 lba, UINT32 count, const void *buf);
 
 /* ------------------------------------------------------- FAT 文件系统（fat 模块）
  * 在块设备上找一个 FAT 卷并读它。**不依赖任何固件服务。** */

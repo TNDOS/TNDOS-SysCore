@@ -40,7 +40,7 @@ typedef unsigned long long tnd_size;
 #  define TND_ABI
 #endif
 
-#define TND_API_VERSION 0x00020700u
+#define TND_API_VERSION 0x00020800u   /* v2.8：块设备加了 Write */
 
 /* 光标。UEFI 只能显隐，**不能设形状** —— 所以 DOS 的"下划线/整块"
  * 没法照搬，固件给什么形状就是什么形状。
@@ -180,6 +180,9 @@ typedef struct {
     tnd_u64     Sectors;       /* 总扇区数；0 = 未知 */
     /* 从 lba 起读 count 个扇区到 buf。返回 0 = 成功。 */
     int (*TND_ABI Read)(tnd_u64 lba, tnd_u32 count, void *buf);
+    /* 写（v2.8）。**可以为 NULL** —— 只读设备就这么留空，blk_write 会返回 -4。
+     * 文件系统看到的是"这块盘不能写"，而不是"写失败了"—— 这两件事不一样。 */
+    int (*TND_ABI Write)(tnd_u64 lba, tnd_u32 count, const void *buf);
 } TND_BLOCK;
 
 typedef struct {
@@ -336,6 +339,8 @@ typedef struct {
      * Read(lba, count, buf)：从 lba 起读 count 个 512 字节扇区到 buf，
      * 返回 0 表示成功。**扇区大小现在恒为 512**，所有驱动都一样。
      * 名字重复返回失败（不静默覆盖）。 */
+    /* 块设备只由**驱动**通过 blk_register 交上来；文件系统在内核里，
+ * 所以 blk_write 不需要出现在 API 表里 —— 那是内核内部的事。 */
     int  (*TND_ABI blk_register)(const TND_BLOCK *b);
 
 } TND_API_TABLE;
