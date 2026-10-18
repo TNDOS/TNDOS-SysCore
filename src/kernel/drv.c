@@ -169,7 +169,22 @@ static int offer(const TND_DRIVER_DESC *d, const TND_DEVICE *dev) {
      *
      * 靠 Vendor 判断是不是 PCI 设备（内置设备 Vendor 为 0）。
      * 摘不到（本来就没驱动）不算错。 */
-    if (dev->Vendor != 0) {
+    /* **暂时不做 pci_disown —— 它会把我们自己脚下那块盘摘掉。**
+     *
+     * 实测（2026-10-18）：efidos.sys 读得到，紧接着 config.sys 和
+     * autoexec.bat 全部返回 EFI_MEDIA_CHANGED（0x800000000000000D）。
+     * 而 EFI_MEDIA_CHANGED 的字面意思就是"卷变了"。
+     *
+     * 谁把卷弄变了：drv.c 在 attach 之前对每个 PCI 设备调 pci_disown，
+     * 把固件的驱动摘掉 —— **包括承载 ESP 的那块 NVMe**。
+     * 固件的 FAT32 驱动没了底层设备，它再读就是 MEDIA_CHANGED。
+     *
+     * 等于把自己的启动盘摘了。
+     *
+     * 正确做法是：**只摘不是我们启动盘的设备**，或者等所有文件读完之后再摘。
+     * 在搞清楚之前先整体关掉 —— 抢设备的问题以后用别的办法解决，
+     * 不能再拿"读不到文件"当代价。 */
+    if (0 && dev->Vendor != 0) {
         int ndis = pci_disown((int)dev->Bus, (int)dev->Dev, (int)dev->Fun);
         log_puts("[log] drv: pci_disown for "); log_puts(dev->Name);
         log_puts(" -> "); log_u64((UINT64)(ndis < 0 ? 0 : ndis)); log_puts(" driver(s)\r\n");
