@@ -440,10 +440,18 @@ static void list_one(const char *path) {
     }
 }
 
+/* 前向声明 —— fat_list 在它定义之前就要用 */
+static void to_fatfs_path(const char *in, char *out, UINTN cap);
+
 /* 对外两个入口：fat_report 列当前目录，fat_list 列指定目录。
  * **不带参数的那个也要走"当前目录"** —— 见 list_one 上面那段注释。 */
 void fat_report(void) { if (gMounted) list_one(0); else con_puts("  no FAT volume mounted\r\n"); }
-void fat_list(const char *path) { if (gMounted) list_one(path); else con_puts("  no FAT volume mounted\r\n"); }
+void fat_list(const char *path) {
+    char apath[TND_MAX_PATH];
+    if (!gMounted) { con_puts("  no FAT volume mounted\r\n"); return; }
+    if (path && *path) { to_fatfs_path(path, apath, sizeof(apath)); list_one(apath); }
+    else list_one(0);
+}
 
 /* ============================================================================
  * fat_read_text —— 把一个文本文件读进缓冲（给 conf.c 兜底用）
@@ -453,15 +461,52 @@ void fat_list(const char *path) { if (gMounted) list_one(path); else con_puts(" 
  *
  * 返回 FRESULT；*outLen 是实际字节数。成功时补一个 0。
  * ==========================================================================*/
+/* **把 DOS 的反斜杠换成 FatFs 认的正斜杠。**
+ *
+ * 实测：type /efi/tndos/config.sys 成功（rc=0, 880 字节），
+ *       而 conf.c 传进来的 DOS 风格路径失败（rc=4 = FR_NO_FILE）。
+ * 同一个文件、同一个 FatFs，只差一个分隔符。
+ *
+ * FatFs 只认正斜杠（字符码 47），DOS 用字符码 92。
+ * 这个转换必须在一个地方做掉，不能让每个调用者自己记得。
+ *
+ * 另外相对路径也会失败 —— 因为 f_chdir 未必被调用过（挂载是懒的）。
+ * 所以没有前导分隔符时，先补上当前目录。 */
+static void to_fatfs_path(const char *in, char *out, UINTN cap) {
+    UINTN i = 0, j = 0;
+    char cwd[TND_MAX_PATH];
+
+    if (!in || !out || !cap) return;
+    out[0] = 0;
+
+    if (in[0] != 92 && in[0] != 47) {
+        if (f_getcwd(cwd, (UINT)sizeof(cwd)) != FR_OK) t_strncpy(cwd, "/", sizeof(cwd));
+        while (cwd[i] && j + 1 < cap) {
+            out[j++] = (cwd[i] == 92) ? 47 : cwd[i];
+            i++;
+        }
+        if (j && out[j - 1] != 47 && j + 1 < cap) out[j++] = 47;
+        i = 0;
+    }
+    while (in[i] && j + 1 < cap) {
+        out[j++] = (in[i] == 92) ? 47 : in[i];
+        i++;
+    }
+    out[j] = 0;
+}
+
 int fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen) {
     FIL    fil;
     FRESULT fr;
     UINT   br = 0;
+    char   apath[TND_MAX_PATH];
 
     if (outLen) *outLen = 0;
     if (!gMounted || !buf || !cap) return (int)FR_NOT_READY;
 
-    fr = f_open(&fil, path, FA_READ);
+    /* **路径必须转一次。** 见 to_fatfs_path 的注释。 */
+    to_fatfs_path(path, apath, sizeof(apath));
+    fr = f_open(&fil, apath, FA_READ);
     if (fr != FR_OK) return (int)fr;
 
     fr = f_read(&fil, buf, (UINT)(cap - 1), &br);

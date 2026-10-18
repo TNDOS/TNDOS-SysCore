@@ -482,6 +482,45 @@ void shell_exec_line(char *line) {
      * 所以在 exitboot 之后敲这条，看到的就是"我们真的接手了"的证据。
      * ================================================================== */
     /* ==================================================================
+     * **TYPE —— 把文件内容打出来。走 FatFs，不碰固件。**
+     *
+     * 加它有两个理由：
+     *   1  它本来就该有（DOS 的基本命令）
+     *   2  **它是定位手段** —— 如果 type config.sys 能读出来，而开机时
+     *      conf.c 读不到，那问题在调用方式；如果 type 也读不到，
+     *      那就是文件本身在盘上是坏的（EFI_LOAD_ERROR 常指坏簇链）。
+     *      这两个结论完全不同，不能靠猜。
+     * ================================================================== */
+    if (!t_stricmp(cmd, "TYPE")) {
+        char *arg = line + 4;      /* line 是原始行，cmd 只是前 32 字节的命令名 */
+        static char tbuf[8192];
+        UINTN tlen = 0;
+        int trc;
+
+        while (*arg == ' ') arg++;
+        if (!*arg) { con_puts("  usage: TYPE <file>\r\n"); return; }
+        if (!fat_ready()) {
+            int bi, bn = blk_count();
+            for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        }
+        if (!fat_ready()) { con_puts("  no FAT volume\r\n"); return; }
+
+        trc = fat_read_text(arg, tbuf, sizeof(tbuf), &tlen);
+        con_puts("\r\n  fat_read_text rc="); con_u64((UINT64)trc);
+        con_puts("  len="); con_u64((UINT64)tlen); con_puts("\r\n\r\n");
+        if (trc == 0 && tlen) {
+            UINTN i;
+            for (i = 0; i < tlen; i++) {
+                if (tbuf[i] == '\r') continue;
+                if (tbuf[i] == '\n') con_putc('\r');
+                con_putc(tbuf[i]);
+            }
+            con_puts("\r\n");
+        }
+        return;
+    }
+
+    /* ==================================================================
      * **FATWRITE —— 读写自检。**
      *
      * 读通路能列目录、写通路能下命令，**都不等于拼起来能用**。
