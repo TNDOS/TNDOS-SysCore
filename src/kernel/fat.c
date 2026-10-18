@@ -517,3 +517,83 @@ int fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen) {
     if (outLen) *outLen = (UINTN)br;
     return 0;
 }
+
+/* ============================================================================
+ * 写操作 —— 和读一样，**只要 FatFs 挂上了就走它**，不碰固件。
+ *
+ * 之前 mkdir / del / copy 全挂在 EFI SimpleFileSystem 上，而那条路
+ * 在 pci_disown / 自己写过盘之后就坏了（EFI_MEDIA_CHANGED）。
+ * 现在这些命令和 dir 走同一条路。
+ * ==========================================================================*/
+
+int fat_mkdir(const char *path) {
+    char ap[TND_MAX_PATH];
+    if (!gMounted) return -1;
+    to_fatfs_path(path, ap, sizeof(ap));
+    {
+        FRESULT fr = f_mkdir(ap);
+        if (fr != FR_OK) { con_puts("  mkdir failed, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+    }
+    con_puts("  created directory "); con_puts(path); con_puts("\r\n");
+    return 0;
+}
+
+int fat_unlink(const char *path) {
+    char ap[TND_MAX_PATH];
+    if (!gMounted) return -1;
+    to_fatfs_path(path, ap, sizeof(ap));
+    {
+        FRESULT fr = f_unlink(ap);
+        if (fr != FR_OK) { con_puts("  delete failed, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+    }
+    con_puts("  deleted "); con_puts(path); con_puts("\r\n");
+    return 0;
+}
+
+int fat_rename(const char *from, const char *to) {
+    char a[TND_MAX_PATH], b[TND_MAX_PATH];
+    if (!gMounted) return -1;
+    to_fatfs_path(from, a, sizeof(a));
+    to_fatfs_path(to,   b, sizeof(b));
+    {
+        FRESULT fr = f_rename(a, b);
+        if (fr != FR_OK) { con_puts("  rename failed, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+    }
+    con_puts("  renamed "); con_puts(from); con_puts(" -> "); con_puts(to); con_puts("\r\n");
+    return 0;
+}
+
+/* 拷贝：开两个文件对倒。缓冲 8 KB 是保守值 —— 大点更快，但要多占内存。 */
+int fat_copy(const char *from, const char *to) {
+    FIL    fi, fo;
+    FRESULT fr;
+    UINT   br = 0, bw = 0;
+    static UINT8 cbuf[8192];
+    char   a[TND_MAX_PATH], b[TND_MAX_PATH];
+    UINT64 total = 0;
+
+    if (!gMounted) return -1;
+    to_fatfs_path(from, a, sizeof(a));
+    to_fatfs_path(to,   b, sizeof(b));
+
+    fr = f_open(&fi, a, FA_READ);
+    if (fr != FR_OK) { con_puts("  cannot open source, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+    fr = f_open(&fo, b, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr != FR_OK) { f_close(&fi); con_puts("  cannot create target, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+
+    for (;;) {
+        fr = f_read(&fi, cbuf, sizeof(cbuf), &br);
+        if (fr != FR_OK) break;
+        if (br == 0) break;
+        fr = f_write(&fo, cbuf, br, &bw);
+        if (fr != FR_OK || bw != br) { fr = (fr != FR_OK) ? fr : FR_DISK_ERR; break; }
+        total += br;
+    }
+    f_close(&fi);
+    f_close(&fo);
+
+    if (fr != FR_OK) { con_puts("  copy failed, FRESULT="); con_u64((UINT64)fr); con_puts("\r\n"); return (int)fr; }
+    con_puts("  copied "); con_puts(from); con_puts(" -> "); con_puts(to);
+    con_puts("  ("); con_u64(total); con_puts(" bytes)\r\n");
+    return 0;
+}

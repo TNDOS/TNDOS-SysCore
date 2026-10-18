@@ -687,35 +687,50 @@ static EFI_STATUS create_dir(const char *dos) {
     return s;
 }
 
+/* **只要 FatFs 挂上了，写操作就走它。** 理由和 vfs_dir 一样：
+ * 我们自己写过盘之后，固件那份 FAT 缓存就过期了，它的 Delete/Open 会
+ * 返回 EFI_MEDIA_CHANGED。写操作不能留在那条路上。 */
+static int use_fatfs(void) {
+    if (!fat_ready()) {
+        int bi, bn = blk_count();
+        for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+    }
+    return fat_ready();
+}
+
 int vfs_mkdir(const char *dos) {
-    EFI_STATUS s = create_dir(dos);
+    if (use_fatfs()) return fat_mkdir(dos) == 0;
+    { EFI_STATUS s = create_dir(dos);
     if (EFI_ERROR(s)) { con_puts("  mkdir failed: "); con_puts(vfs_efi_error(s)); con_puts("\r\n"); return 0; }
     con_puts("  created directory "); con_puts(dos); con_puts("\r\n");
-    return 1;
+    return 1; }
 }
 
 int vfs_rmdir(const char *dos) {
-    EFI_FILE_PROTOCOL *f = 0;
+    if (use_fatfs()) return fat_unlink(dos) == 0;
+    { EFI_FILE_PROTOCOL *f = 0;
     EFI_STATUS s = vfs_open(dos, 1, &f);
     if (EFI_ERROR(s) || !f) { con_puts("  cannot open: "); con_puts(vfs_efi_error(s)); con_puts("\r\n"); return 0; }
     s = f->Delete(f);
     if (EFI_ERROR(s)) { con_puts("  delete failed: "); con_puts(vfs_efi_error(s)); con_puts("\r\n"); f->Close(f); return 0; }
     con_puts("  removed directory "); con_puts(dos); con_puts("\r\n");
-    return 1;
+    return 1; }
 }
 
 int vfs_unlink(const char *dos) {
-    EFI_FILE_PROTOCOL *f = 0;
+    if (use_fatfs()) return fat_unlink(dos) == 0;
+    { EFI_FILE_PROTOCOL *f = 0;
     EFI_STATUS s = vfs_open(dos, 1, &f);
     if (EFI_ERROR(s) || !f) { con_puts("  cannot open: "); con_puts(vfs_efi_error(s)); con_puts("\r\n"); return 0; }
     s = f->Delete(f);
     if (EFI_ERROR(s)) { con_puts("  delete failed: "); con_puts(vfs_efi_error(s)); con_puts("\r\n"); f->Close(f); return 0; }
     con_puts("  deleted "); con_puts(dos); con_puts("\r\n");
-    return 1;
+    return 1; }
 }
 
 int vfs_copy(const char *a, const char *b) {
-    EFI_FILE_PROTOCOL *f = 0;
+    if (use_fatfs()) return fat_copy(a, b) == 0;
+    { EFI_FILE_PROTOCOL *f = 0;
     EFI_STATUS s;
     void *buf = 0;
     UINTN got = 0, total = 0;
@@ -761,10 +776,13 @@ int vfs_copy(const char *a, const char *b) {
     con_puts("  copied "); con_puts(a); con_puts(" -> "); con_puts(b);
     con_puts("  ("); con_u64(total); con_puts(" bytes)\r\n");
     log_kv_u64("copy.bytes", total);
-    return 1;
+    return 1; }
 }
 
 int vfs_rename(const char *a, const char *b) {
+    /* **FatFs 有真正的 rename**（改目录项），不用"拷贝再删除"。
+     * 老路那样做在大文件上既慢又可能半途失败留下半个副本。 */
+    if (use_fatfs()) return fat_rename(a, b) == 0;
     /* UEFI has no rename, so it is copy-then-delete-source */
     if (!vfs_copy(a, b)) return 0;
     if (!vfs_unlink(a)) { con_puts("  !! copied, but the source could not be deleted\r\n"); return 0; }
