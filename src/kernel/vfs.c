@@ -42,8 +42,43 @@ int vfs_init(void) {
     t_strcpy(gDrives[0].label, "TNDDOS");
     gDrives[0].root = gEnv.Root;
     gDriveCount = 1;
-    gCwd[0] = '\\'; gCwd[1] = 0;
     gCurDrive = 'C';
+
+    /* ================================================================
+     * **初始目录不能写死成 "\"。**
+     *
+     * 真机上实测：提示符是 C:\>，而 autoexec.bat 在 \EFI\TNDOS\ 里 ——
+     * 于是"脚本没有加载"。而在 QEMU 里之所以看不出问题，是因为启动流程
+     * 恰好还能找到它。
+     *
+     * 所以：**优先进入内核自己所在的那个目录**（\EFI\TNDOS），
+     * 进不去才退回根目录。这不是讨好用户，是唯一说得通的定义 ——
+     * 系统的配置文件就在那儿。
+     * ================================================================ */
+    {
+        EFI_FILE_PROTOCOL *probe = 0;
+        EFI_STATUS ps;
+
+        gCwd[0] = '\\'; gCwd[1] = 0;
+        ps = gEnv.Root->Open(gEnv.Root, &probe, L"\\EFI\\TNDOS",
+                             EFI_FILE_MODE_READ, 0);
+        if (!EFI_ERROR(ps) && probe) {
+            probe->Close(probe);
+            t_strcpy(gCwd, "\\EFI\\TNDOS");
+            log_puts("[log] vfs: cwd = \\EFI\\TNDOS (the kernel's own directory)\r\n");
+        } else {
+            log_puts("[log] vfs: cwd = \\ (no \\EFI\\TNDOS on this volume)\r\n");
+        }
+    }
+
+    /* 把"这是哪个卷"打到屏幕上 —— 真机上 dir 出来是空的，而我们不知道
+     * C: 到底指到了哪个卷。卷标和容量是最好的身份证。 */
+    con_puts("  drive C: label=\"");
+    con_puts(gDrives[0].label);
+    con_puts("\"  cwd=");
+    con_puts(gCwd);
+    con_puts("\r\n");
+
     log_puts("[log] vfs: mounted C: -> ESP root\r\n");
     vfs_mount_all();                 /* 其余可挂载的卷依次 D: E: F: ... */
     return 1;
