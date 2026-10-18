@@ -96,6 +96,39 @@ reworked. It establishes the marking style.)
 **注意第 4 条**：`ExitBootServices` 不在移除清单里。 Note item 4: ExitBootServices is not on the removal list.
 它恰恰是这个项目存在的理由 —— 交还 Boot Services 之后机器还能用。 It is the reason this project exists: the machine still works after handing Boot Services back.
 
+## 五之二 第三方轮子**不是**过渡期代码 Third-party wheels are NOT transitional
+
+这一条要单独写清楚，否则会误伤。 This deserves its own section, or it will cause the wrong code to be deleted.
+
+```
+FatFs R0.16（third_party/fatfs/）           永久保留
+OpenBSD nvme.c / ahci.c / pciide.c          永久保留
+
+它们不依赖 UEFI Boot Services，退出前后都能用。
+它们是我们特意搬来的轮子 —— **搬来就是为了不用再删**。
+```
+
+**过渡期的是"胶水"，不是"轮子"。** What is transitional is the glue, not the wheel.
+
+```
+过渡期：我们自己写的、绕不过固件的那几层
+        lib/file.c        用 SimpleFileSystem 读文件
+        kernel/vfs.c      文件路径解析走固件
+        kernel/drv.c      LoadImage 加载 .EFI
+        kernel/pci.c      用 ACPI/MCFG 找 ECAM
+
+永久：  轮子本身
+        FatFs            文件系统
+        OpenBSD 驱动      块设备
+        我们自己的 blk   块设备抽象（不是胶水，是我们的层）
+        我们自己的 pmm / 堆
+```
+
+**判断标准**：去掉 UEFI 之后它还能不能活。 The test is simple: does it still work once UEFI is gone?
+
+能活的，是轮子，留着。 If it survives, it is a wheel -- keep it.
+不能活的，是胶水，迟早删。 If it does not, it is glue -- scheduled for removal.
+
 ## 六 一次具体判断 A concrete judgement
 
 「用 GOP 拿帧缓冲参数」算不算过渡期代码？ Is reading framebuffer parameters via GOP transitional?
