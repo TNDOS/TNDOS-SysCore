@@ -33,6 +33,42 @@ static void tnx_put_rc(int rc);
 /* 入口也是 SysV：程序在 ELF 那边是默认 ABI，内核这边必须显式对齐 */
 typedef int (TND_ABI *TNX_ENTRY)(const TND_API_TABLE *api);
 
+/* ============================================================================
+ * 在**程序自己的栈**上调用它的入口。
+ *
+ * 原来这里是一句普通的 C 调用 —— 程序于是跑在**内核栈**上。
+ * 而 tnd_printf 里有一个 512 字节的 char buf[512]，
+ * 再叠上 shell -> run_program -> tnx_run -> entry 这几层，
+ * 内核栈就到底了。表现出来是：
+ *
+ *   *** CPU EXCEPTION ***  page fault
+ *   RIP : 0x0000000002800F2F      <- 程序里 tnd_printf 的 o_uint
+ *   CR2 : 0xFFFFFFFFFFC7EBC45     <- rbp 已经是野的
+ *
+ * 程序一进 tnd_printf 就 `mov rbp, rsp`，所以 rbp 坏 = 调用它的时候 rsp 已经越界。
+ * hello 和 EXECOM 崩在同一个 CR2 模式，而且换基址之前就这样 —— 是老问题。
+ *
+ * 现在：跳进去之前把 rsp 切到程序窗口顶端，返回之后再换回来。
+ * 窗口 8 MiB，映像只有几 KB，剩下的全是给它的栈。
+ *
+ * 参数走 MS ABI（内核是 windows-msvc 编的）：rcx=栈顶, rdx=入口, r8=api。
+ * 调之前把 api 挪到 rdi —— 程序那边是 SysV。
+ * ==========================================================================*/
+__attribute__((naked)) int tnx_call_on_stack(void *sp, void *fn, const void *api) {
+    __asm__ __volatile__(
+        "pushq %rbx\n"
+        "movq  %rsp, %rbx\n"        /* 存旧 rsp（rbx 两边都是 callee-saved）*/
+        "movq  %rcx, %rsp\n"        /* 切到程序栈 */
+        "andq  $-16, %rsp\n"        /* 16 字节对齐 */
+        "movq  %r8,  %rdi\n"        /* SysV 的第一个参数 = api */
+        "callq *%rdx\n"             /* 调程序入口 */
+        "movq  %rbx, %rsp\n"        /* 换回内核栈 */
+        "popq  %rbx\n"
+        "retq\n"
+    );
+}
+
+
 /* 本次要跑的程序参数。v1 一次只有一个程序，所以放文件级静态即可；
  * 将来有多进程时它会变成"每进程一份"。 */
 static int   gRunArgc = 0;
@@ -429,8 +465,12 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
     if (verbose) con_puts("        running ...\r\n");
     {
         TNX_ENTRY entry = (TNX_ENTRY)(UINTN)(imageBase + entryRva);
+        /* **栈顶在窗口末端**：映像在窗口底部，栈从顶上往下长，中间空着 7 MB 多。 */
+        void *stackTop = (void *)(UINTN)(imageBase + TNX_WINDOW_SIZE - 64);
+        log_kv_u64("tnx.stack.top", (UINT64)(UINTN)stackTop);
+        log_kv_u64("tnx.stack.imageBase", (UINT64)imageBase);
         api_setup(gRunArgc, gRunArgv);      /* 装好 fd 0/1/2 与 argv */
-        rc = entry(api_get_table());
+        rc = tnx_call_on_stack(stackTop, (void *)entry, api_get_table());
         api_teardown();                     /* 关掉程序忘了关的句柄 */
     }
     if (verbose || rc != 0) {

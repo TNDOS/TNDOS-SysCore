@@ -36,26 +36,26 @@ del TMP\COPY.TXT
 rd TMP
 echo.
 echo   --- TNX program: API v2 self-test ---
-REM HELLO.TNX    ; 改基址之后 hello 的 argv[0] 是野指针，启动会 page fault
+REM HELLO.TNX    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- same program, with an argument (argv) ---
-REM HELLO.TNX /verbose    ; 改基址之后 hello 的 argv[0] 是野指针，启动会 page fault
+REM HELLO.TNX /verbose    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- extension is optional ---
-REM HELLO    ; 改基址之后 hello 的 argv[0] 是野指针，启动会 page fault
+REM HELLO    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- TNX <file> inspects, does not run ---
-REM tnx HELLO.TNX    ; 改基址之后 hello 的 argv[0] 是野指针，启动会 page fault
+REM tnx HELLO.TNX    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- external commands (TNDOS-Commands, TNX programs) ---
 TREE
 echo.
 echo   --- EXECOM: typing a .EXE gets you a diagnosis, not an error ---
-REM PEDEMO.EXE    ; EXECOM 在 argv 上有野指针，启动会 page fault
-REM DOSDEMO.EXE    ; EXECOM 在 argv 上有野指针，启动会 page fault
+REM PEDEMO.EXE    ; see docs/FAULT-tnx-crash.md
+REM DOSDEMO.EXE    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- EXECOM also works without the extension ---
-REM PEDEMO    ; EXECOM 在 argv 上有野指针，启动会 page fault
+REM PEDEMO    ; see docs/FAULT-tnx-crash.md
 echo.
 echo   --- FIND / ATTRIB / FC ---
 FIND DOS TNDOS.TXT
