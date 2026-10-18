@@ -30,6 +30,12 @@ DEVICE=VGA.EFI
 ; 而少写一个的代价是：机器上那块盘根本不出现，症状只是"dir 列不出来"。
 ; 实测踩过：真机只写了 NVME，而盘其实在 SATA 上，结果一个块设备都没有。
 ;
+; **SAY.TNX —— 诊断用驱动，只打印不碰硬件。**
+; 它把"驱动模型到底有没有跑通"变成屏幕上的五行字：
+;   映像加载 / 窗口基址 / C 运行时 / API 版本 / 登记结果
+; 如果哪天驱动加载出问题，先看它打出来几行。
+DEVICE=SAY.TNX
+
 DEVICE=PS2.TNX
 DEVICE=NVME.TNX
 DEVICE=AHCI.TNX

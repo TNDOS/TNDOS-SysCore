@@ -297,7 +297,7 @@ if (Test-Path $SdkTnx) {
     # 「调用第一个驱动的回调时跳进一段函数序言」，根本看不出是这个原因。
     # 1 MiB 一个槽，8 个槽正好塞进现有的 8 MiB 驱动窗口（内核那边边界不用改）。
     $slot = 0
-    foreach ($d in 'ps2','vga','ahci','usb','nvme') {
+    foreach ($d in 'ps2','vga','ahci','usb','nvme','say') {
         $src = Join-Path $SDK ("drivers\" + $d + "\" + $d + ".c")
         if (-not (Test-Path $src)) { Write-Host ("  [tnx] " + $d + ": no source, skipped"); continue }
         $out  = Join-Path $DrvDir ($d.ToUpper() + '.TNX')
