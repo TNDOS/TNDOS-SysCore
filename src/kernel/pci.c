@@ -328,7 +328,45 @@ void pci_scan(void) {
 
     scan_bus(gEcamBusStart);
 
-    /* 只对 bus 0 上找到的设备发问 —— VMD 一定在 bus 0。 */
+    /* ---- 跟着 PCI 桥走 ----
+     *
+     * **这是 VMD 之外的正规做法，也是唯一能在 QEMU 里验证的部分。**
+     * VMD 的本质就是"设备不在 bus 0"；而 PCI 桥的 secondary bus 号
+     * 写在配置空间偏移 0x19 —— 读它就行，不用猜、不用盲扫。
+     *
+     * 桥的编号是固件（OVMF）在我们的程序之前分配好的，所以这里读到的
+     * 就是真实值。没有这一步，任何挂在桥后面的设备都看不见 ——
+     * 包括真实机器上的 VMD，也包括 QEMU 里 -device pcie-pci-bridge 后面的盘。 */
+    n = gPciCount;
+    for (i = 0; i < n; i++) {
+        UINT32 cls = (UINT32)gPciDev[i].Class;
+        /* class 0x06 / subclass 0x04 = PCI-to-PCI bridge */
+        if (cls != 0x060400u) continue;
+        {
+            UINT8 vb = (UINT8)gPciDev[i].Bus;
+            UINT8 vd = (UINT8)gPciDev[i].Dev;
+            UINT8 vf = (UINT8)gPciDev[i].Fun;
+            /* **偏移 0x18 的 dword 里，secondary bus 在 bit 8..15。**
+             *
+             *   0x18 Primary Bus   -> >> 0
+             *   0x19 Secondary Bus -> >> 8    <- 要的是这个
+             *   0x1A Subordinate   -> >> 16
+             *   0x1B Sec Latency
+             *
+             * 原来写的是 >> 16（取成了 subordinate）。QEMU 那个测试桥的
+             * primary/secondary/subordinate 都是 1，取错也照样对 —— 于是
+             * 测试"通过"了。真机上桥的 subordinate 通常比 secondary 大，
+             * 取错就会去扫一段没有设备的总线。**侥幸通过比失败更危险。** */
+            UINT8 sec = (UINT8)((pci_read32(vb, vd, vf, 0x18) >> 8) & 0xFF);
+
+            if (sec == 0 || sec == vb) continue;
+            log_puts("[log] pci: bridge covers bus "); log_u64((UINT64)sec);
+            log_puts(" -- scanning it\r\n");
+            scan_bus(sec);
+        }
+    }
+
+    /* ---- VMD ---- */
     n = gPciCount;
     for (i = 0; i < n; i++) {
         /* class 0x01 存储 / subclass 0x04 RAID：这就是 VMD（或类似的
