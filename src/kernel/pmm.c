@@ -141,6 +141,47 @@ int pmm_init(void) {
      * 失败的那一个窗口，加载器会拒绝使用。 */
     gWinProgOk = pmm_reserve(TNX_PROG_BASE,   (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
     gWinDrvOk  = pmm_reserve(TNX_DRIVER_BASE, (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT));
+
+    /* ========================================================================
+     * **Debug 探测：程序窗口的候选基址到底哪些是空的。**
+     *
+     * 背景：0x1000000 退出前 AllocatePages(AllocateAddress) 拿不到，
+     * 于是 TNX 程序在 exitboot 之前全部被拒。要换基址就得知道换到哪。
+     * 猜没有意义 —— 固件把内存分给谁是它说了算。
+     *
+     * 这里把几个候选地址挨个试一遍，拿到就立刻放掉（不能占着别人的坑）。
+     * 串口里会直接写清楚哪个 FREE、哪个 taken。
+     *
+     * 这段是临时的诊断代码，选定基址之后就删掉。
+     * ======================================================================*/
+    {
+        static const UINT64 cand[] = {
+            0x0000000001000000ULL,   /* 现在用的，已知拿不到 */
+            0x0000000002800000ULL,   /* 紧接驱动窗口 */
+            0x0000000003000000ULL,
+            0x0000000003800000ULL,
+            0x0000000004000000ULL,
+            0x0000000000800000ULL,
+            0x0000000006000000ULL
+        };
+        UINTN i;
+        UINTN pgs = (UINTN)((TNX_WINDOW_SIZE + PMM_PAGE_SIZE - 1) >> PMM_PAGE_SHIFT);
+        log_puts("[probe] program-window candidates (8 MiB each):\r\n");
+        for (i = 0; i < sizeof(cand) / sizeof(cand[0]); i++) {
+            EFI_PHYSICAL_ADDRESS at = (EFI_PHYSICAL_ADDRESS)cand[i];
+            EFI_STATUS s = gEnv.BS->AllocatePages(AllocateAddress, EfiLoaderData, pgs, &at);
+            log_puts("[probe]   ");
+            log_hex(cand[i]);
+            if (EFI_ERROR(s) || at != (EFI_PHYSICAL_ADDRESS)cand[i]) {
+                log_puts("  taken\r\n");
+            } else {
+                log_puts("  ** FREE **\r\n");
+                gEnv.BS->FreePages(at, pgs);
+            }
+        }
+        log_puts("[probe] done\r\n");
+    }
+
     if (!gWinProgOk) log_puts("[log] pmm: ** program window NOT ours -- TNX programs will be refused **\r\n");
     if (!gWinDrvOk)  log_puts("[log] pmm: ** driver window NOT ours -- TNX drivers will be refused **\r\n");
 
