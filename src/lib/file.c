@@ -50,8 +50,31 @@ EFI_STATUS t_read_file(const char *name, char *buf, UINTN cap, UINTN *outLen) {
     if (!gEnv.Root) return EFI_NOT_FOUND;
     t_ascii_to_u16(name, wname, 260);
 
+    /* ================================================================
+     * **每次打开都记一笔，带序号。**
+     *
+     * 真机上的症状：前 5 次打开都成功，从第 6 次开始全失败 —— 而且
+     * 失败的顺序跟着 efidos.sys 里的顺序走（换个顺序就换个倒霉鬼）。
+     * 这不是路径问题，也不是大小问题（失败的那个 10.5KB 比成功的 13.7KB 还小）。
+     *
+     * 要分清两种可能：
+     *   句柄泄漏   -> 序号一直涨，但每次失败的都是"第 N 次之后"
+     *   内存耗尽   -> 堆的空闲页在几次读取之间持续下降
+     * 所以下面把序号、结果、堆的空闲页一起打出来 —— 一行就能分开。
+     * ================================================================ */
+    {
+        static UINT32 seq;
+        seq++;
+        log_puts("[log] file#"); log_u64((UINT64)seq);
+        log_puts(" open "); log_puts(name); log_puts("\r\n");
+    }
+
     s = gEnv.Root->Open(gEnv.Root, &f, wname, EFI_FILE_MODE_READ, 0);
-    if (EFI_ERROR(s) || !f) { log_puts("[log] open FAILED: "); log_puts(name); log_puts("\r\n"); return s; }
+    if (EFI_ERROR(s) || !f) {
+        log_puts("[log] file# open FAILED: "); log_puts(name);
+        log_puts("  status="); log_u64((UINT64)s); log_puts("\r\n");
+        return s;
+    }
 
     for (;;) {
         UINTN want = 512;
