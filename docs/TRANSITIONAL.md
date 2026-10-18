@@ -96,38 +96,74 @@ reworked. It establishes the marking style.)
 **注意第 4 条**：`ExitBootServices` 不在移除清单里。 Note item 4: ExitBootServices is not on the removal list.
 它恰恰是这个项目存在的理由 —— 交还 Boot Services 之后机器还能用。 It is the reason this project exists: the machine still works after handing Boot Services back.
 
-## 五之二 第三方轮子**不是**过渡期代码 Third-party wheels are NOT transitional
+## 五之二 轮子是脚手架，胶水可能长期存在 Wheels are scaffolding; glue may stay
 
-这一条要单独写清楚，否则会误伤。 This deserves its own section, or it will cause the wrong code to be deleted.
+**2026-10-18 作者更正。** Corrected by the author, 2026-10-18.
+这一节我第一版写反了，把"轮子永久、胶水过渡"当成了结论。 I got this backwards in the first version, treating wheels as permanent and glue as temporary.
 
-```
-FatFs R0.16（third_party/fatfs/）           永久保留
-OpenBSD nvme.c / ahci.c / pciide.c          永久保留
-
-它们不依赖 UEFI Boot Services，退出前后都能用。
-它们是我们特意搬来的轮子 —— **搬来就是为了不用再删**。
-```
-
-**过渡期的是"胶水"，不是"轮子"。** What is transitional is the glue, not the wheel.
+### 轮子**是过渡期代码** Wheels ARE transitional
 
 ```
-过渡期：我们自己写的、绕不过固件的那几层
-        lib/file.c        用 SimpleFileSystem 读文件
-        kernel/vfs.c      文件路径解析走固件
-        kernel/drv.c      LoadImage 加载 .EFI
-        kernel/pci.c      用 ACPI/MCFG 找 ECAM
-
-永久：  轮子本身
-        FatFs            文件系统
-        OpenBSD 驱动      块设备
-        我们自己的 blk   块设备抽象（不是胶水，是我们的层）
-        我们自己的 pmm / 堆
+FatFs R0.16                    -> 脚手架，我们自己写出文件系统之后删
+OpenBSD nvme.c / ahci.c / pciide.c  -> 脚手架，我们理解机制之后自己写
 ```
 
-**判断标准**：去掉 UEFI 之后它还能不能活。 The test is simple: does it still work once UEFI is gone?
+搬它们的目的**不是"以后就一直用它"**，是两条： The point of importing them is not "use them forever". It is two things:
 
-能活的，是轮子，留着。 If it survives, it is a wheel -- keep it.
-不能活的，是胶水，迟早删。 If it does not, it is glue -- scheduled for removal.
+```
+1  让功能先跑起来，验证整条链是对的
+2  **看清人家怎么实现的** —— 然后用自己的代码实现同一件事
+```
+
+这和决定四一致："复用的是咋运行的，不是模型复用、代码直接复用，得看人家咋实现的。"
+This matches decision four: reuse how it works, not the model and not the code.
+
+**所以轮子是脚手架。脚手架是要拆的。** The wheels are scaffolding. Scaffolding gets taken down.
+
+### 胶水**不一定是过渡期代码** Glue is not necessarily transitional
+
+```
+lib/file.c      SimpleFileSystem 读文件      -> 要换，因为退出后要工作
+kernel/vfs.c    路径解析走固件                -> 要换，同理
+kernel/drv.c    LoadImage 加载 .EFI           -> 要换，同理
+kernel/pci.c    ACPI/MCFG 找 ECAM             -> **可能长期保留**
+```
+
+**为什么 pci.c 不一样**：UEFI 是平台的一部分，不是我们要甩掉的包袱。 Why is pci.c different: UEFI is part of the platform, not baggage to be thrown off.
+
+只要还有新的标准、新的设备要靠 UEFI 提供（ACPI 表、SMBIOS、RTC、安全启动状态……），
+这一层就得在。 As long as new standards and new devices are surfaced through UEFI
+(ACPI tables, SMBIOS, RTC, secure boot state...), this layer has to exist.
+
+**它不是"过渡期"，它是我们的接口层。** It is not a transitional layer; it is our interface layer.
+
+### 判断标准 The test
+
+**不是"去掉 UEFI 之后还能不能活"。** Not "does it survive without UEFI".
+
+**是"ExitBootServices 之后它还要不要工作"。** It is "does it still have to work after ExitBootServices".
+
+```
+还要工作   -> 必须是我们的，或者至少不依赖固件协议
+不再需要   -> 可以是固件给的，也可以是脚手架
+```
+
+按这条重排： Re-sorted by that test:
+
+```
+退出后必须工作，所以最终必须是我们的：
+  blk 层、文件系统、块设备驱动、输入驱动、控制台、内存管理、时基
+
+退出后才开始需要，但入口在退出前：
+  ACPI 表解析（pci.c 的 ECAM）-> **保留，可能长期**
+  帧缓冲参数（GOP 一次调用，拿到数字）-> 保留
+
+退出后就再也用不到：
+  不可用（这个项目里不存在这种东西）
+```
+
+**注意：没有"因为用了固件所以必须删"这种规则。** Note: there is no rule that says "it used the firmware, therefore it must go".
+规则是"退出之后还要不要工作"。 The rule is "does it still have to work after exit".
 
 ## 六 一次具体判断 A concrete judgement
 
