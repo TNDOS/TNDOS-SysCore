@@ -14,6 +14,7 @@
  * interface unchanged.
  * ==========================================================================*/
 #include "tnd.h"
+#include "ff.h"      /* f_chdir / f_getcwd，cd 要用 */
 
 #define TND_MAX_DRIVES 26          /* A..Z —— 一块盘上多个分区是常态，4 个不够 */
 #define TND_MAX_COMPS  32
@@ -588,6 +589,28 @@ int vfs_chdir(const char *dos) {
     }
     d = drive_of(gCurDrive);
     if (!d) return 0;
+
+    /* ================================================================
+     * **FatFs 挂上了就用它的 f_chdir。**
+     *
+     * 用户明确要求过"cd 不能被拦"。之前 cd 走固件，退出之后必定失败，
+     * 所以被 vfs_resolve 挡着；现在文件系统是自己的了，就不该再挡。
+     *
+     * gCwd 用 f_getcwd 回读 —— 不自己拼路径。拼路径容易和 FatFs 的
+     * 规范化规则（大小写、斜杠、"." 和 ".."）对不上，而那类不一致
+     * 事后极难查。让它告诉我们它到底在哪。
+     * ================================================================ */
+    if (fat_ready()) {
+        FRESULT fr = f_chdir(dos[0] ? dos : "/");
+        if (fr != FR_OK) {
+            con_puts("  cannot change directory, FRESULT=");
+            con_u64((UINT64)fr);
+            con_puts("\r\n");
+            return 0;
+        }
+        if (f_getcwd(gCwd, (UINT)TND_MAX_PATH) != FR_OK) t_strncpy(gCwd, "\\", TND_MAX_PATH);
+        return 1;
+    }
 
     s = vfs_resolve(dos, path, sizeof(path));
     if (EFI_ERROR(s)) { con_puts("  invalid path\r\n"); return 0; }
