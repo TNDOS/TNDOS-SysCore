@@ -269,21 +269,117 @@ int fat_selftest(void) {
  * dir 列出来的永远是根目录 —— 而表头上还写着 "Directory of C:\"，
  * 看起来像是对的。**命令行列出错目录比报错危险得多**：报错你知道有问题，
  * 列错目录你会照着它做决定。 */
+/* ---------------------------------------------------------------- dir 的格式
+ *
+ * 照 cmd 的 dir 来。之前的版本只有"名字 + 大小"，可读但敷衍。
+ * 该有的：卷标、卷序列号、日期时间、千分位、对齐、剩余空间。
+ * 这些都来自 BPB 和 FILINFO，读一次就有，不是造出来的。 */
+
+static void print_commas(UINT64 v) {
+    char b[32];
+    UINTN n, i;
+    t_utoa(v, b);
+    n = t_strlen(b);
+    for (i = 0; i < n; i++) {
+        if (i && ((n - i) % 3) == 0) con_putc(',');
+        con_putc(b[i]);
+    }
+}
+
+/* 卷标 + 序列号 + 剩余空间。序列号在 BPB 偏移 39（4 字节）。 */
+static void print_volume_header(char *label, UINTN cap, UINT32 *serial, UINT64 *freeBytes) {
+    static UINT8 sec[512];
+    FATFS *fs = 0;
+    DWORD  nfree = 0;
+    UINTN  i = 0;
+
+    label[0] = 0;
+    (void)f_getlabel("", label, (DWORD *)&i);
+    *serial = 0;
+    if (blk_read(0, gFatVolBase + 39 / 512, 1, sec) == 0) {
+        UINTN off = 39 % 512;
+        *serial = (UINT32)sec[off] | ((UINT32)sec[off + 1] << 8)
+                | ((UINT32)sec[off + 2] << 16) | ((UINT32)sec[off + 3] << 24);
+    }
+    *freeBytes = 0;
+    if (f_getfree("", &nfree, &fs) == FR_OK && fs) {
+        *freeBytes = (UINT64)nfree * fs->csize * 512ULL;
+    }
+
+    con_puts("\r\n Volume in drive C");
+    if (label[0]) { con_puts(" is "); con_puts(label); }
+    con_puts("\r\n Volume Serial Number is ");
+    {
+        static const char hx[] = "0123456789ABCDEF";
+        UINTN g;
+        for (g = 0; g < 4; g++) con_putc(hx[(*serial >> (12 - g * 4)) & 0xF]);
+        con_putc('-');
+        for (g = 0; g < 4; g++) con_putc(hx[(*serial >> (12 - g * 4)) & 0xF]);
+    }
+    con_puts("\r\n");
+}
+
+/* 一个条目：日期 时间  大小/<DIR>  名字 */
+static void print_entry(const FILINFO *fi, int isDir) {
+    UINTN y, m, d, hh, mm, len;
+
+    y = 1980 + ((fi->fdate >> 9) & 0x7F);
+    m = (fi->fdate >> 5) & 0x0F;
+    d = fi->fdate & 0x1F;
+    hh = (fi->ftime >> 11) & 0x1F;
+    mm = (fi->ftime >> 5) & 0x3F;
+
+    if (m  < 1) m = 1;  if (m  > 12) m = 12;
+    if (d  < 1) d = 1;  if (d  > 31) d = 31;
+    if (hh > 23) hh = 23;
+    if (mm > 59) mm = 59;
+
+    { char b[8]; t_utoa(y, b); while (t_strlen(b) < 4) { /* 补零 */ break; }
+      /* 年补到 4 位 */
+      if (t_strlen(b) < 4) con_putc('0');
+      con_puts(b); }
+    con_putc('/');
+    if (m < 10) con_putc('0'); { char b[8]; t_utoa(m, b); con_puts(b); }
+    con_putc('/');
+    if (d < 10) con_putc('0'); { char b[8]; t_utoa(d, b); con_puts(b); }
+    con_puts("  ");
+    if (hh < 10) con_putc('0'); { char b[8]; t_utoa(hh, b); con_puts(b); }
+    con_putc(':');
+    if (mm < 10) con_putc('0'); { char b[8]; t_utoa(mm, b); con_puts(b); }
+    con_puts("   ");
+
+    if (isDir) {
+        con_puts("<DIR>          ");
+    } else {
+        char b[32];
+        t_utoa((UINT64)fi->fsize, b);
+        len = t_strlen(b);
+        { UINTN commas = (len - 1) / 3; UINTN vis = len + commas; while (vis++ < 14) con_putc(' '); }
+        print_commas((UINT64)fi->fsize);
+        con_putc(' ');
+    }
+    con_puts(fi->fname);
+    con_puts("\r\n");
+}
+
 static void list_one(const char *path) {
     DIR   dir;
     FILINFO fi;
     FRESULT fr;
     int   nDir = 0, nFile = 0;
     UINT64 bytes = 0;
-    UINTN  col;
     char   cwd[TND_MAX_PATH];
+    UINT64 freeBytes = 0;
+    char   label[24];
+    UINT32 serial = 0;
 
     if (!path) {
         if (f_getcwd(cwd, (UINT)sizeof(cwd)) != FR_OK) t_strncpy(cwd, "\\", sizeof(cwd));
         path = cwd;
     }
 
-    con_puts("\r\n Volume in drive C\r\n");
+    print_volume_header(label, sizeof(label), &serial, &freeBytes);
+
     con_puts(" Directory of C:");
     con_puts(path);
     con_puts("\r\n\r\n");
@@ -296,18 +392,13 @@ static void list_one(const char *path) {
         return;
     }
 
-    /* 先列子目录，再列文件 —— DOS 就是这么排的 */
+    /* **先子目录、再文件** —— cmd 的 dir 就是这个顺序 */
     for (;;) {
         fr = f_readdir(&dir, &fi);
         if (fr != FR_OK || fi.fname[0] == 0) break;
         if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
         if (!(fi.fattrib & AM_DIR)) continue;
-
-        con_puts("  ");
-        con_puts(fi.fname);
-        col = 2 + t_strlen(fi.fname);
-        while (col < 34) { con_putc(' '); col++; }
-        con_puts("<DIR>\r\n");
+        print_entry(&fi, 1);
         nDir++;
     }
     f_closedir(&dir);
@@ -319,26 +410,34 @@ static void list_one(const char *path) {
             if (fr != FR_OK || fi.fname[0] == 0) break;
             if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
             if (fi.fattrib & AM_DIR) continue;
-
-            con_puts("  ");
-            con_puts(fi.fname);
-            col = 2 + t_strlen(fi.fname);
-            while (col < 34) { con_putc(' '); col++; }
-            con_u64((UINT64)fi.fsize);
-            con_puts("\r\n");
+            print_entry(&fi, 0);
             nFile++;
             bytes += (UINT64)fi.fsize;
         }
         f_closedir(&dir);
     }
 
-    con_puts("\r\n");
-    con_puts("  "); con_u64((UINT64)nFile);
-    con_puts(" file(s)   ");
-    con_u64(bytes);
-    con_puts(" bytes\r\n");
-    con_puts("  "); con_u64((UINT64)nDir);
-    con_puts(" dir(s)\r\n\r\n");
+    /* 统计 —— 和 cmd 一样，右对齐到第 30 列左右 */
+    {
+        char nb[32];
+        UINTN l;
+        t_utoa((UINT64)nFile, nb);
+        con_puts("\r\n");
+        l = t_strlen(nb);
+        while (l++ < 16) con_putc(' ');
+        con_puts(nb); con_puts(" File(s)");
+        l = 0; { char b2[32]; t_utoa(bytes, b2); l = t_strlen(b2); }
+        while (l++ < 16) con_putc(' ');
+        print_commas(bytes); con_puts(" bytes\r\n");
+
+        { char b3[32]; t_utoa((UINT64)nDir, b3); l = t_strlen(b3); }
+        while (l++ < 16) con_putc(' ');
+        { char b4[32]; t_utoa((UINT64)nDir, b4); con_puts(b4); }
+        con_puts(" Dir(s)");
+        l = 0; { char b5[32]; t_utoa(freeBytes, b5); l = t_strlen(b5); }
+        while (l++ < 16) con_putc(' ');
+        print_commas(freeBytes); con_puts(" bytes free\r\n\r\n");
+    }
 }
 
 /* 对外两个入口：fat_report 列当前目录，fat_list 列指定目录。
