@@ -78,7 +78,13 @@ static const char *trap_name(UINT64 v) {
  * 只打印然后停机。**不要试图返回** —— 返回就是重新执行那条出错指令。 */
 void trap_common(UINT64 vec, UINT64 *frame) {
     UINT64 cr2 = 0;
+    UINT64 rsp = 0, rbp = 0;
     __asm__ __volatile__("movq %%cr2, %0" : "=r"(cr2));
+    /* **rsp / rbp 必须一起记。**
+     * 只记 cr2 的话，就只能反推 rbp，而反推依赖"故障指令是 rbp-0x44"这个假设 ——
+     * 那次我就靠这个假设走错了方向（还把 cr2 抄成了 17 位）。 */
+    __asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));
+    __asm__ __volatile__("movq %%rbp, %0" : "=r"(rbp));
 
     /* 先写日志 —— 控制台可能已经不可靠了，日志更稳 */
     log_puts("[log] *** CPU EXCEPTION \"");
@@ -90,6 +96,8 @@ void trap_common(UINT64 vec, UINT64 *frame) {
     log_kv_u64("exc.cs",      frame[2]);
     log_kv_u64("exc.rflags",  frame[3]);
     log_kv_u64("exc.cr2",     cr2);
+    log_kv_u64("exc.rsp",     rsp);
+    log_kv_u64("exc.rbp",     rbp);
 
     con_puts("\r\n\r\n  *** CPU EXCEPTION ***\r\n");
     con_puts("      vector : "); con_u64(vec);
@@ -101,6 +109,8 @@ void trap_common(UINT64 vec, UINT64 *frame) {
     if (vec == 14) {
         con_puts("      CR2    : "); con_hex(cr2);
         con_puts("   <- faulting address\r\n");
+        con_puts("      RSP    : "); con_hex(rsp); con_puts("\r\n");
+        con_puts("      RBP    : "); con_hex(rbp); con_puts("\r\n");
     }
     con_puts("      (halted, not resuming)\r\n");
 

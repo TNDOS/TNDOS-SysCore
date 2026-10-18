@@ -279,3 +279,103 @@ __attribute__((naked)) int tnx_call_on_stack(void *sp, void *fn, const void *api
 ```
 
 **这张表说明：程序窗口已经成功拿到，崩溃与"窗口不可用"无关。**
+
+---
+
+## 十一、重要更正与新的定位（2026-10-18 晚，外部评审之后）
+
+### 更正 1：我之前抄错了 CR2
+
+**之前写的**：`0xFFFFFFFFFFC7EBC4D`（17 位十六进制，68 位 —— 不可能是 64 位寄存器）
+
+**串口里的原始值**（`log_kv_u64("exc.cr2", cr2)`，十进制）：
+
+```
+[log] exc.vector  = 14
+[log] exc.errcode = 0
+[log] exc.rip     = 41946928        = 0x2800F30
+[log] exc.cs      = 56
+[log] exc.rflags  = 66118
+[log] exc.cr2     = 18446744072768711757 = 0xFFFFFFFFC7EBEC4D
+```
+
+**正确的 CR2 是 `0xFFFFFFFFC7EBEC4D`。** 外部评审说"这个数值需要重新核对"是对的，
+是我从截图抄错了（多一个 F、E 抄成 C）。
+
+### 更正 2：我之前反汇编的是**别的程序**
+
+**崩的是 `hello`，我反汇编的是 `execom.elf`。** 两个程序都装在 `0x2800000`，
+但函数布局完全不同 —— 拿 A 的地址解释 B 的崩溃是无效推理。
+
+**用 `build/tnx/hello.elf` 重新反汇编 `0x2800F30`：**
+
+```asm
+0000000002800f10 <tnd_argc>:
+ 2800f10: 55                      pushq %rbp
+ 2800f11: 48 89 e5                movq  %rsp, %rbp
+ 2800f14: 48 8b 05 25 16 00 00    movq  0x1625(%rip), %rax   # 0x2802540 <gApi>
+ 2800f1b: 48 85 c0                testq %rax, %rax
+ 2800f1e: 74 0c                   je    0x2800f2c
+ 2800f20: 48 8b 40 28             movq  0x28(%rax), %rax
+ 2800f24: 48 85 c0                testq %rax, %rax
+ 2800f27: 74 03                   je    0x2800f2c
+ 2800f29: 5d                      popq  %rbp
+ 2800f2a: ff e0                   jmpq  *%rax              # 尾调用
+ 2800f2c: 31 c0                   xorl  %eax, %eax
+ 2800f2e: 5d                      popq  %rbp
+ 2800f2f: c3                      retq
+
+0000000002800f30 <tnd_argv>:            <-- RIP = 0x2800F30 就是这里
+ 2800f30: 55                      pushq %rbp              <-- 崩在这条
+ 2800f31: 48 89 e5                movq  %rsp, %rbp
+ 2800f34: 48 8b 05 05 16 00 00    movq  0x1605(%rip), %rax   # 0x2802540 <gApi>
+ ...
+```
+
+**结论（这一条是新的、硬的）：**
+
+`pushq %rbp` 会写 `rsp - 8`。`CR2 = 0xFFFFFFFFC7EBEC4D`，所以
+**进入 `tnd_argv` 时 `rsp` = `0xFFFFFFFFC7EBEC55`** —— 一个野值。
+
+**而 `tnd_argc`（`0x2800F10`）刚刚才成功返回**（它是尾调用，`popq %rbp` 之后
+`jmpq *%rax`，返回地址直接回到调用者）。
+
+**两者之间只有一句 `tnd_printf("  argc = %d", ac)`。**
+
+**所以：`tnd_printf` 返回时 `rsp` 已经坏了。**
+
+### 更正 3：`exc.rsp` / `exc.rbp` 是处理器的，不是现场的
+
+我新加了这两项日志，但**读数位置错了**：
+
+```c
+__asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));   /* 在 trap_common 里 */
+```
+
+读到的是**异常处理器自己的栈**（`0x3000098`，在内核栈上），不是出错那一刻的。
+原因：`trap.c` 压栈的 frame 只有 `errcode / RIP / CS / RFLAGS` 四项，
+**根本没有保存 `rsp` / `rbp`**。
+
+要拿到现场栈指针，必须**在汇编入口里把 `rsp`/`rbp` 一起压进 frame**，
+不能在 C 里读。**这一条已经确认是设计缺陷，不是读错了寄存器。**
+
+### 现在的最强假设
+
+`tnd_printf` 的序言是：
+
+```asm
+00000000028000d0 <tnd_printf>:
+ 28000d0: 55             pushq %rbp
+ 28000d1: 48 89 e5       movq  %rsp, %rbp
+ 28000d4: 41 57          pushq %r15
+ 28000d6: 41 56          pushq %r14
+ 28000d8: 41 55          pushq %r13
+ 28000da: 41 54          pushq %r12
+```
+
+它保存了 `rbp` 和 `r12..r15`。**如果它有一条提前 `ret` 绕过了收尾**，
+`rsp` 就会停在半路 —— 而且**偏差会是固定的**（与"CR2 是常量"吻合）。
+
+**下一步就是把这个函数的完整反汇编读完，逐条找有没有不配对的 `addq $..., %rsp` 或提前 `ret`。**
+
+---
