@@ -136,6 +136,15 @@ $Serial  = Join-Path $Build 'serial.log'
 $QemuErr = Join-Path $Build 'qemu_err.txt'
 $EspImg  = Join-Path $Build 'esp.img'
 $Inc     = Join-Path $Root 'src\include'
+# FatFs 的头和源在 SDK 仓库里。**在顶层算好** ——
+# 放到 Build-Pe 的参数字面量里会因为求值时机拿到 $null。
+# （这一条是踩出来的：构建在 Build-Pe 之前就静默退出，连 throw 都没到。）
+$FatFsDir = $null
+# **用环境变量，不用 $SDK** —— $SDK 在这一行还没赋值（它在下面才解析）。
+# 这解释了两天前那次"构建静默退出"：Join-Path 拿到 $null 直接抛了。
+$SdkEnv = $env:TNDDOS_SDK
+if ($SdkEnv -and (Test-Path $SdkEnv)) { $FatFsDir = Join-Path $SdkEnv 'third_party\fatfs\source' }
+Write-Host ("  fatfs      " + $(if ($FatFsDir -and (Test-Path $FatFsDir)) { $FatFsDir } else { 'NOT FOUND -- FatFs will be skipped' }))
 
 if ($ShowEnv) {
     Write-Host '=== TNDDOS 工具链定位结果 ==='
