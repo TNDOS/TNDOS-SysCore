@@ -36,7 +36,7 @@ del TMP\COPY.TXT
 rd TMP
 echo.
 echo   --- TNX program: API v2 self-test ---
-UDTEST.TNX
+STRESS.TNX
 echo.
 echo   --- same program, with an argument (argv) ---
 REM HELLO.TNX /verbose    ; see docs/DEBUG-REPORT.md -- crashes at tnd_argc/tnd_argv

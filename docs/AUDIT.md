@@ -284,3 +284,82 @@ ImageSize = 0xAA10
 2. AES 的 `InvCipher` 为什么错（用 CTR 已把范围锁死在逆 S 盒那一半）
 3. `tnxpack` 补 BSS 段
 4. 控制台偶发丢字符（`decrypt =` 那行少一个十六进制字符）
+---
+
+## 八、客户机内存分布（QEMU `info mem`，CR3=0x1F801000）
+
+```
+虚拟地址范围                      大小        权限
+0x00000000 - 0x1E800000       488 MB      rw     <- 主体：RAM 恒等映射
+0x1E800000 - 0x1EA00000         2 MB      r-
+0x1EA00000 - 0x1F6AD000       ~12 MB      rw
+0x1F6AD000 - 0x1F6B0000        12 KB      r-     <- OVMF 私有页
+0x1F6B0000 - 0x1F6EB000      ~250 KB      交错 r/rw
+0x1F6EB000 - 0x1F800000      ~1.3 MB      rw
+0x1F800000 - 0x1FE00000         6 MB      r-     <- 页表自己
+0x1FE00000 - 0x10000000000      1 TB      rw     <- 兜底映射
+```
+
+**这张表一次性排掉了三条猜测**：
+
+1. 程序窗口 `0x2800000..0x3000000` 落在第一段 rw 里 —— **全部映射、可读写**
+2. 所以 `0x280A5F0` 上的 `#GP` **不可能是缺页**（`#PF` 这条路彻底关闭）
+3. 那 `#GP` 只剩对齐；而 `0x280A5F0 + 29 = 0x280A60D` 确实不 16 对齐 —— 吻合
+
+## 九、剩下的唯一矛盾，以及一步分辨的办法
+
+反汇编（内存里读到的，和 ELF 一致）：
+
+```asm
+0x02801ed9: 48 c7 c0 00 f0 ff ff    movq $-4096, %rax     <- 循环起点
+0x02801ef0: 66 0f 6f d8              movdqa %xmm0, %xmm3   <- 循环体
+0x02801f05: 66 0f 7f 98 f0 a5 80 02  movdqa %xmm3, 0x280a5f0(%rax)
+0x02801f15: 48 83 c0 10              addq $0x10, %rax      <- 每次 +16
+0x02801f19: 75 d5                    jne  0x2801ef0
+```
+
+**`%rax` 只能是 `-4096 + 16k`，永远不是 29** —— 而实测 `exc.rax = 29/31/0`。
+
+**两种可能，用一步就能分辨**：
+
+```
+A  控制流从别处跳进了 0x2801F05 这条指令中间
+B  trap 报的 RIP 仍然不对（udtest 只验过 #UD/NOERR 桩，#GP/ERR 桩没单独验）
+```
+
+**分辨办法：QEMU 加 `-d int`**。它把每一次异常按顺序打进日志，
+**数据来自 QEMU 的 CPU 模型，不经过我们的 trap** —— 独立第三方证据。
+
+```
+日志里的 RIP == trap 报的 RIP   ->  B 不成立，就是 A
+日志里的 RIP != trap 报的 RIP   ->  B 成立，ERR 桩还有偏移 bug
+```
+
+### 如果是 A（控制流跑飞）
+
+嫌疑按可能性排：
+1. `tnx_call_on_stack` 的切栈/返回路径（naked asm，栈顶切到 `0x2FFFFC0`）
+2. `setjmp`/`longjmp`（puff 用它做错误处理，已经踩过一次坑）
+3. `md5_update` 里 `p` 指针的推进
+
+验证：把 stress 拆成三个小程序，一个一个跑，看哪个先崩。
+
+### 如果是 B（ERR 桩仍有 bug）
+
+补一个 udtest2：**主动触发对齐 #GP**（不用 `ud2`），已知寄存器，再比一次。
+
+## 十、今天新增的工具
+
+| 工具 | 用途 |
+|---|---|
+| `UDTEST.TNX` | 设已知寄存器再 `ud2`，验证 trap 报告是否可信 |
+| `STRESS.TNX` | MD5 / AES / inflate 三个真实开源库的压力测试 |
+| QEMU `xp /Ni` | 直接反汇编客户机内存 |
+| QEMU `xp /Nxb` | 直接 dump 客户机内存 |
+| QEMU `info registers` | 当前寄存器（含 XMM、CR0/CR3/CR4/EFER） |
+| QEMU `info mem` | 客户机页表映射区间 |
+| QEMU `stop` | 暂停客户机，让内存状态稳定再读 |
+
+**Visual Studio 用不了**：它只能调宿主进程或走调试传输调另一台机器，
+没有 GDB remote 客户端；而 QEMU 只对外提供 GDB remote。
+`lldb.exe` 也起不来 —— 缺 `python310.dll`（本机 Python 是 3.12，名字对不上）。
