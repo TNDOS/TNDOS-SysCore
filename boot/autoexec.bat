@@ -36,13 +36,13 @@ del TMP\COPY.TXT
 rd TMP
 echo.
 echo   --- TNX program: API v2 self-test ---
-REM HELLO.TNX     ; see docs/FAULT-tnx-crash.md (page fault on %p)
+HELLO.TNX 
 echo.
 echo   --- same program, with an argument (argv) ---
-REM HELLO.TNX /verbose    ; see docs/FAULT-tnx-crash.md (page fault on %p)
+HELLO.TNX /verbose
 echo.
 echo   --- extension is optional ---
-REM HELLO     ; see docs/FAULT-tnx-crash.md (page fault on %p)
+HELLO 
 echo.
 echo   --- TNX <file> inspects, does not run ---
 REM tnx HELLO.TNX    ; see docs/FAULT-tnx-crash.md

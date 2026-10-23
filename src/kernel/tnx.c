@@ -57,12 +57,21 @@ typedef int (TND_ABI *TNX_ENTRY)(const TND_API_TABLE *api);
 __attribute__((naked)) int tnx_call_on_stack(void *sp, void *fn, const void *api) {
     __asm__ __volatile__(
         "pushq %rbx\n"
-        "movq  %rsp, %rbx\n"        /* 存旧 rsp（rbx 两边都是 callee-saved）*/
+        /* **RDI / RSI 必须保住。**
+         * 这个函数自己是 Windows x64 ABI —— 在那套约定里 RDI/RSI 是
+         * callee-saved，调用者指望它们在返回后不变。
+         * 而被调的程序是 SysV，SysV 允许被调用者随便改这两个寄存器。
+         * 原来没存，等于让程序把内核的 RDI/RSI 踩掉。 */
+        "pushq %rdi\n"
+        "pushq %rsi\n"
+        "movq  %rsp, %rbx\n"        /* 存旧 rsp（三次 push 之后的位置）*/
         "movq  %rcx, %rsp\n"        /* 切到程序栈 */
         "andq  $-16, %rsp\n"        /* 16 字节对齐 */
         "movq  %r8,  %rdi\n"        /* SysV 的第一个参数 = api */
         "callq *%rdx\n"             /* 调程序入口 */
         "movq  %rbx, %rsp\n"        /* 换回内核栈 */
+        "popq  %rsi\n"
+        "popq  %rdi\n"
         "popq  %rbx\n"
         "retq\n"
     );
