@@ -97,3 +97,30 @@ GOP 协议退出之后失效，但**帧缓冲那块内存还在** ——
 改动    <逐条列出改了什么；没改就写"未修改">
 状态    <已接入 / 编译通过但未接入 / 待获取 / 仅参考>
 ```
+---
+
+## 压力测试用的第三方代码（`repos/TNDOS-SDK/examples/stress/src/`）
+
+这三份都是原样引入，没有改算法，只在外面套了 `compat/` 里的 freestanding 头文件。
+
+| 文件 | 来源 | 许可 | 用途 |
+|---|---|---|---|
+| `puff.c` / `puff.h` | zlib 官方仓库 `contrib/puff` | zlib licence | 参考 inflate 实现，验证真实 deflate 流 |
+| `aes.c` / `aes.h` | `kokke/tiny-AES-c` | Unlicense（公有领域） | AES-128 ECB / CBC / CTR |
+| `md5.c` / `md5.h` | RFC 1321 附录参考实现 | 公有领域 | MD5，含 RFC 附录 A.5 的标准向量 |
+
+**获取方式**：GitHub 系域名在本机被墙（TLS 重置），改从 gitee 镜像取：
+
+```
+puff.c   gitee.com/mirrors/zlib/raw/master/contrib/puff/puff.c
+aes.c    gitee.com/mirrors/tiny-AES-c/raw/master/aes.c
+md5.c    按 RFC 1321 附录实现（公有领域，未从网络取）
+```
+
+### 为了 freestanding 做的适配
+
+`compat/string.h`、`compat/setjmp.h` 是自写的声明头（freestanding target 没有它们）；
+`shim.c` 提供 `memcpy/memset/memmove/memcmp/strlen/strcmp/strncmp/strcpy/strncpy`
+以及用汇编实现的 `setjmp/longjmp`（puff.c 用它们做错误处理）。
+
+**本项目的 MIT 许可不覆盖上面这三份第三方代码**，它们各自保留原许可。

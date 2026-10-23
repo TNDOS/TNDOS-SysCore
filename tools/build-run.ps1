@@ -250,14 +250,25 @@ Write-Host ("  SDK        " + $SDK)
 $TnxOut = Join-Path $Build 'tnx'
 New-Item -ItemType Directory -Force -Path $TnxOut | Out-Null
 
+$StressDir = Join-Path $SDK 'examples\stress'
+$StressSrc = Join-Path $StressDir 'src'
+
+# 单元：每个 .c 编成一个 .o。第三方代码（md5 / aes / puff）也在这里，
+# 用同一组参数编 —— 这样它们和我们的代码受同等待遇，出问题就一起露出来。
 $TnxUnits = @(
-    @{ Name = 'tndrt'; Src = (Join-Path $SDK 'lib\tndrt.c') },
-    @{ Name = 'hello'; Src = (Join-Path $SDK 'examples\hello\hello.c') }
+    @{ Name = 'tndrt';  Src = (Join-Path $SDK 'lib\tndrt.c') },
+    @{ Name = 'hello';  Src = (Join-Path $SDK 'examples\hello\hello.c') },
+    @{ Name = 'stress'; Src = (Join-Path $StressDir 'stress.c') },
+    @{ Name = 'md5';    Src = (Join-Path $StressSrc 'md5.c') },
+    @{ Name = 'shim';   Src = (Join-Path $StressSrc 'shim.c') },
+    @{ Name = 'aes';    Src = (Join-Path $StressSrc 'aes.c') },
+    @{ Name = 'puff';   Src = (Join-Path $StressSrc 'puff.c') }
 )
 foreach ($u in $TnxUnits) {
-    Write-Host ("  [tnx] " + $u.Name + ".c   -> " + $u.Name + ".o")
+    Write-Host ("  [tnx] " + $u.Name + ".c" + ' '.PadLeft([Math]::Max(0, 12 - $u.Name.Length)) + " -> " + $u.Name + ".o")
     $ta = @('-target','x86_64-unknown-none','-O2','-ffreestanding','-fno-builtin','-fno-stack-protector',
-            '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',(Join-Path $SDK 'lib'),
+            '-mno-red-zone','-nostdlib','-Wall','-I',$Inc,'-I',(Join-Path $SDK 'lib'),'-I',$StressSrc,
+            '-I',(Join-Path $StressSrc 'compat'),
             '-c',$u.Src,'-o',(Join-Path $TnxOut ($u.Name + '.o')))
     Invoke-Native (Join-Path $LLVM_BIN 'clang.exe') $ta
     if ($script:NativeExit -ne 0) { throw ("clang 编译 TNX 程序失败: " + $u.Src) }
@@ -265,13 +276,21 @@ foreach ($u in $TnxUnits) {
 
 $lld = Join-Path $LLVM_BIN 'ld.lld.exe'
 if (-not (Test-Path $lld)) { throw ("找不到 ld.lld.exe：" + $lld) }
-Write-Host '  [tnx] ld.lld      -> hello.elf'
-$la = @('-m','elf_x86_64','-T',(Join-Path $SDK 'linker\tnx.ld'),'-o',(Join-Path $TnxOut 'hello.elf'),
-        (Join-Path $TnxOut 'tndrt.o'),(Join-Path $TnxOut 'hello.o'))
-Invoke-Native $lld $la
-if ($script:NativeExit -ne 0) { throw 'ld.lld 链接 TNX 程序失败' }
 
-& (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut 'hello.elf') -Out (Join-Path $TndDir 'HELLO.TNX')
+# 程序：每个程序是一组 .o，各自链一次、各自 pack 一次。
+$TnxPrograms = @(
+    @{ Elf = 'hello';  Out = 'HELLO.TNX';  Objs = @('tndrt','hello') },
+    @{ Elf = 'stress'; Out = 'STRESS.TNX'; Objs = @('tndrt','stress','md5','shim','aes','puff') }
+)
+foreach ($p in $TnxPrograms) {
+    $objs = @()
+    foreach ($o in $p.Objs) { $objs += (Join-Path $TnxOut ($o + '.o')) }
+    Write-Host ("  [tnx] ld.lld      -> " + $p.Elf + '.elf')
+    $la = @('-m','elf_x86_64','-T',(Join-Path $SDK 'linker\tnx.ld'),'-o',(Join-Path $TnxOut ($p.Elf + '.elf'))) + $objs
+    Invoke-Native $lld $la
+    if ($script:NativeExit -ne 0) { throw ('ld.lld 链接 TNX 程序失败: ' + $p.Elf) }
+    & (Join-Path $TOOLKIT 'tnxpack.ps1') -In (Join-Path $TnxOut ($p.Elf + '.elf')) -Out (Join-Path $TndDir $p.Out)
+}
 
 # ---------------------------------------------------------------------------
 # **TNX 驱动：和旧的 .EFI 驱动放同一个文件夹**
