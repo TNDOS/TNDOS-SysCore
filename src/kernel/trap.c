@@ -43,24 +43,48 @@ static UINT16        gCs = 0;
 volatile UINT64 gTrapCr2 = 0;
 
 /* ------------------------------------------------------------------ 桩
- * **必须是 naked**：不然编译器会在入口插 prologue，rsp 就不是 CPU 压好的那个了，
- * frame 的偏移全错。
+ * **必须是 naked**：不然编译器会在入口插 prologue，rsp 就不是 CPU 压好的那个了。
  *
- * 参数按 MS ABI 放：第一个在 rcx（向量号），第二个在 rdx（frame 指针）。
+ * 三件事，顺序不能换：
  *
- * **必须用 call 不能用 jmp。** MS ABI 要求调用方预留 32 字节 shadow space、
- * 而且入口 16 字节对齐；硬件异常入口这两条都不保证。jmp 进去之后，
- * 被调函数一旦 spill 到 shadow space，就会踩到异常帧。 */
-/* 有出错码的那几个：#PF 栈上是 [errcode][RIP][CS][RFLAGS]。
+ *   1  **先存 CR2**。在 C 里读的话，万一处理函数自己又踩了坏地址，CR2 会被
+ *      后一次覆盖 —— 记下来的就不是最初那次故障了。
+ *   2  **把 15 个通用寄存器全压栈**。只留 RIP/CR2 是不够的：像 movdqa 那种
+ *      对齐异常，光看 RIP 根本不知道地址是怎么算出来的，必须看寄存器。
+ *   3  **用 call 不用 jmp**。MS ABI 要求调用方预留 32 字节 shadow space 且入口
+ *      16 字节对齐，硬件异常入口这两条都不保证；jmp 进去会让被调函数的 spill
+ *      踩到异常帧。
  *
- * **注意：同特权级的 #PF 不压 RSP/SS。** 那是跨特权级切换才有的。
- * 所以 frame[4]/frame[5] 是栈上的任意内容，不能当 RSP/SS 解释 ——
- * 这一点原来记错了，外面评审指出来的。 */
+ * 参数：rcx=向量号  rdx=硬件帧指针  r8=寄存器区指针。
+ *
+ * 同特权级的 #PF **不压 RSP/SS**（那是跨特权级才有的），所以硬件帧只有四项：
+ *   [0]=errcode  [1]=RIP  [2]=CS  [3]=RFLAGS
+ * ==========================================================================*/
+#define TRAP_PUSH_GPRS                                        \
+        "pushq %rax\n"                                        \
+        "pushq %rbx\n"                                        \
+        "pushq %rcx\n"                                        \
+        "pushq %rdx\n"                                        \
+        "pushq %rsi\n"                                        \
+        "pushq %rdi\n"                                        \
+        "pushq %rbp\n"                                        \
+        "pushq %r8\n"                                         \
+        "pushq %r9\n"                                         \
+        "pushq %r10\n"                                        \
+        "pushq %r11\n"                                        \
+        "pushq %r12\n"                                        \
+        "pushq %r13\n"                                        \
+        "pushq %r14\n"                                        \
+        "pushq %r15\n"
+
+/* 有出错码的：栈上已经是 [errcode][RIP][CS][RFLAGS]，15 次 push 之后帧在 +120 */
 #define TRAP_STUB_ERR(name, vec)                              \
     __attribute__((naked)) void name(void) {                  \
         __asm__ __volatile__("movq %cr2, %rax\n"            \
                              "movq %rax, gTrapCr2(%rip)\n"   \
-                             "movq %rsp, %rdx\n"             \
+                             TRAP_PUSH_GPRS                   \
+                             "movq %rsp, %r8\n"              \
+                             "leaq 120(%rsp), %rdx\n"        \
                              "movl $" #vec ", %ecx\n"       \
                              "andq $-16, %rsp\n"             \
                              "subq $0x28, %rsp\n"            \
@@ -68,14 +92,15 @@ volatile UINT64 gTrapCr2 = 0;
                              "hlt\n");                        \
     }
 
-/* 不压出错码的那几个：自己补一个 0，让帧布局统一。
- * **补完之后才能取 frame 指针**，否则会指到补的那个 0 前面去。 */
+/* 不压出错码的：先补一个 0，再压寄存器，所以帧在 +128 */
 #define TRAP_STUB_NOERR(name, vec)                            \
     __attribute__((naked)) void name(void) {                  \
         __asm__ __volatile__("movq %cr2, %rax\n"            \
                              "movq %rax, gTrapCr2(%rip)\n"   \
                              "pushq $0\n"                     \
-                             "movq %rsp, %rdx\n"             \
+                             TRAP_PUSH_GPRS                   \
+                             "movq %rsp, %r8\n"              \
+                             "leaq 128(%rsp), %rdx\n"        \
                              "movl $" #vec ", %ecx\n"       \
                              "andq $-16, %rsp\n"             \
                              "subq $0x28, %rsp\n"            \
@@ -100,8 +125,13 @@ static const char *trap_name(UINT64 v) {
 
 /* ------------------------------------------------------------------ 公共处理
  * 只打印然后停机。**不要试图返回** —— 返回就是重新执行那条出错指令。 */
-void trap_common(UINT64 vec, UINT64 *frame) {
+void trap_common(UINT64 vec, UINT64 *frame, UINT64 *gprs) {
     UINT64 cr3 = 0;
+    /* gprs 的布局（桩里按 rax,rbx,rcx,rdx,rsi,rdi,rbp,r8..r15 的顺序 push，
+     * 所以最后压的在最低地址）：
+     *   [0]r15 [1]r14 [2]r13 [3]r12 [4]r11 [5]r10 [6]r9 [7]r8
+     *   [8]rbp [9]rdi [10]rsi [11]rdx [12]rcx [13]rbx [14]rax */
+    enum { R15, R14, R13, R12, R11, R10, R9, R8, RBP, RDI, RSI, RDX, RCX, RBX, RAX };
     /* CR2 由汇编桩第一条指令存进 gTrapCr2 —— **不在这里读**。
      * 原因见 gTrapCr2 的注释：在 C 里读会被二次缺页覆盖。 */
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
@@ -119,6 +149,23 @@ void trap_common(UINT64 vec, UINT64 *frame) {
     log_kv_u64("exc.cr2",     gTrapCr2);
     log_kv_u64("exc.cr3",     cr3);
     log_kv_u64("exc.frame_ptr",(UINT64)(UINTN)frame);
+    /* **通用寄存器全打出来。**
+     * 光有 RIP 和 CR2 不够：像 movdqa 那种对齐异常，必须看地址是怎么算出来的。 */
+    log_kv_u64("exc.rax", gprs[RAX]);
+    log_kv_u64("exc.rbx", gprs[RBX]);
+    log_kv_u64("exc.rcx", gprs[RCX]);
+    log_kv_u64("exc.rdx", gprs[RDX]);
+    log_kv_u64("exc.rsi", gprs[RSI]);
+    log_kv_u64("exc.rdi", gprs[RDI]);
+    log_kv_u64("exc.rbp", gprs[RBP]);
+    log_kv_u64("exc.r8",  gprs[R8]);
+    log_kv_u64("exc.r9",  gprs[R9]);
+    log_kv_u64("exc.r10", gprs[R10]);
+    log_kv_u64("exc.r11", gprs[R11]);
+    log_kv_u64("exc.r12", gprs[R12]);
+    log_kv_u64("exc.r13", gprs[R13]);
+    log_kv_u64("exc.r14", gprs[R14]);
+    log_kv_u64("exc.r15", gprs[R15]);
 
     /* **走一遍页表。** 这是 AUDIT 的 P0 —— 它把"这个地址到底映没映射"
      * 从推演变成事实。走的是当前 CR3（也就是固件那张表），只读。 */

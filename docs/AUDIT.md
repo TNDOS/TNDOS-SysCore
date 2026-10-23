@@ -222,3 +222,65 @@ tnx.entry.present  = 1
 2. 用 `paging_walk` 走 `0xFFFFFFFFC7EBEC0D`，确认它确实表项为 0。
 3. `tndrt.c` 单独用 `-O0` 编一次，重做状态槽实验 —— 若 `-O0` 下 `received` 正确，
    就是编译器把那句 volatile 写入挪走了。
+---
+
+## 七、压力测试（STRESS.TNX）与 trap 的寄存器抓取
+
+### 7.1 trap 现在会保存全部 15 个通用寄存器
+
+以前只记 RIP / CR2，看对齐类异常时完全不够。现在桩里按固定顺序 push
+rax,rbx,rcx,rdx,rsi,rdi,rbp,r8..r15，`trap_common` 收第三个参数 `gprs`
+并把它们逐个写进日志。`frame` 仍指向硬件帧（ERR 桩 +120，NOERR 桩 +128）。
+
+### 7.2 压力测试覆盖的第三方代码
+
+| 库 | 来源 | 许可 | 结果 |
+|---|---|---|---|
+| MD5 | RFC 1321 附录参考实现 | 公有领域 | 两条标准向量都 PASS |
+| AES-128 | tiny-AES-c | Unlicense | ECB 加密 PASS、CTR PASS、**ECB 解密 FAIL** |
+| inflate | zlib 的 puff.c | zlib licence | rc=0、长度对、内容 MD5 对 —— PASS |
+
+**AES 只有 `InvCipher` 坏**：加密对、CTR 对（CTR 也走 Cipher），
+所以密钥扩展、S 盒、Cipher 都没问题，问题在逆 S 盒那一半。
+
+### 7.3 新的未解异常：movdqa 的 #GP
+
+```asm
+2801f05: 66 0f 7f 98 f0 a5 80 02    movdqa %xmm3, 0x280a5f0(%rax)
+2801f15: 48 83 c0 10                addq   $0x10, %rax
+2801f19: 75 d5                      jne    0x2801ef0
+```
+
+实测寄存器：`rax=0`、`rbx=400`（load_md5 的 rounds）、`cr2=0`、
+`frame_ptr=0x2FFFFC0`（**正好是 stackTop**）。
+
+**两个矛盾**：
+1. `rax=0` 时目标地址是 `0x280A5F0`，16 字节对齐 —— `movdqa` 不该报 #GP
+2. `frame_ptr` 等于程序栈最顶端，而 `rbx=400` 说明已经深入 `load_md5` ——
+   两者不可能同时成立
+
+**和前面几次一样：RIP 与其余现场信息不自洽。**
+
+### 7.4 另一个独立发现：TNX 里没有描述 .bss 的段
+
+`STRESS.TNX` 只有 **一个** 段：
+
+```
+CODE  flags=0x5  rva=0  fileOff=0xB0  fileSize=0x5C62  memSize=0x5C62
+ImageSize = 0xAA10
+```
+
+`ImageSize` 比 `CODE.MemSize` 大 `0x4DAE`，那部分就是 `.bss`。
+加载器目前靠 `t_memzero(imageBase, ImageSize)` 清到 `ImageSize`，**碰巧是对的**；
+但段表里没有任何东西描述它，`tnxdump` 之类工具会看不懂，
+而且一旦有人把 `t_memzero` 改成"按段清"，`.bss` 立刻变脏。
+
+**建议**：`tnxpack` 为 `.bss` 补一个 `BSS` 段（`FileSize=0`、`MemSize>0`），
+或者明确扩展 `DATA` 段的 `MemSize` 覆盖到 `ImageSize`。
+
+### 7.5 待查（按优先级）
+
+1. 为什么 RIP 和其余现场信息总是不自洽 —— 给 #PF/#GP 配独立 IST 栈后重测
+2. AES 的 `InvCipher` 为什么错（用 CTR 已把范围锁死在逆 S 盒那一半）
+3. `tnxpack` 补 BSS 段
+4. 控制台偶发丢字符（`decrypt =` 那行少一个十六进制字符）
