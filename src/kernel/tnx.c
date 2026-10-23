@@ -56,27 +56,77 @@ typedef int (TND_ABI *TNX_ENTRY)(const TND_API_TABLE *api);
  * ==========================================================================*/
 __attribute__((naked)) int tnx_call_on_stack(void *sp, void *fn, const void *api) {
     __asm__ __volatile__(
+        /* ---------------------------------------------------------------- */
+        /* **保存 Windows x64 的全部被调用者保存寄存器。**                   */
+        /*                                                                  */
+        /* 内核是 --target=x86_64-pc-windows-msvc 编的，在那套 ABI 里        */
+        /* rbx / rbp / rdi / rsi / r12..r15 / xmm6..xmm15 都是 callee-saved，*/
+        /* 调用者指望它们跨调用不变。而被调的是 SysV 程序 —— 那套 ABI 里      */
+        /* 只有 rbx / rbp / r12..r15 是 callee-saved，xmm 全是可以随便改的，  */
+        /* rdi / rsi 更是彻底 caller-saved。                                 */
+        /*                                                                  */
+        /* 原来只存了 rbx / rdi / rsi —— 等于每跑完一个程序，内核的          */
+        /* r12..r15 和 xmm6..xmm15 就被踩一遍。tnx_run 的栈帧、循环变量、     */
+        /* 指针全在这些寄存器里，踩坏之后内核继续往"以为的"地址写，           */
+        /* **包括写进程序的 .text** —— 这就是 CodeSet 被改写的来源。          */
+        /*                                                                  */
+        /* 症状对得上：程序跑第 N 个才崩、RIP 落在不可能出错的指令上、        */
+        /* rax 出现循环里不可能的值、控制台偶尔丢字符。                       */
+        /* ---------------------------------------------------------------- */
         "pushq %rbx\n"
-        /* **RDI / RSI 必须保住。**
-         * 这个函数自己是 Windows x64 ABI —— 在那套约定里 RDI/RSI 是
-         * callee-saved，调用者指望它们在返回后不变。
-         * 而被调的程序是 SysV，SysV 允许被调用者随便改这两个寄存器。
-         * 原来没存，等于让程序把内核的 RDI/RSI 踩掉。 */
+        "pushq %rbp\n"
         "pushq %rdi\n"
         "pushq %rsi\n"
-        "movq  %rsp, %rbx\n"        /* 存旧 rsp（三次 push 之后的位置）*/
-        "movq  %rcx, %rsp\n"        /* 切到程序栈 */
-        "andq  $-16, %rsp\n"        /* 16 字节对齐 */
+        "pushq %r12\n"
+        "pushq %r13\n"
+        "pushq %r14\n"
+        "pushq %r15\n"
+        "movq  %rsp, %rbp\n"        /* rbp = 保存区基址（8 次 push 之后）*/
+        "subq  $160, %rsp\n"        /* xmm6..xmm15，10 x 16 字节 */
+        "movdqu %xmm6,   0(%rsp)\n"
+        "movdqu %xmm7,  16(%rsp)\n"
+        "movdqu %xmm8,  32(%rsp)\n"
+        "movdqu %xmm9,  48(%rsp)\n"
+        "movdqu %xmm10, 64(%rsp)\n"
+        "movdqu %xmm11, 80(%rsp)\n"
+        "movdqu %xmm12, 96(%rsp)\n"
+        "movdqu %xmm13,112(%rsp)\n"
+        "movdqu %xmm14,128(%rsp)\n"
+        "movdqu %xmm15,144(%rsp)\n"
+        /* ---- 切到程序自己的栈，按 SysV 调它 ---- */
+        "movq  %rcx, %rsp\n"
+        "andq  $-16, %rsp\n"
         "movq  %r8,  %rdi\n"        /* SysV 的第一个参数 = api */
-        "callq *%rdx\n"             /* 调程序入口 */
-        "movq  %rbx, %rsp\n"        /* 换回内核栈 */
+        "callq *%rdx\n"
+        /* ---- 换回内核栈，逐个恢复 ---- */
+        /* **用 rbp 做基址恢复 xmm。**
+         *
+         * 踩过一次：存的时候是 subq $160,%rsp 之后写的，所以 xmm6 在 rbp-160；
+         * 恢复时先 movq %rbp,%rsp 把 rsp 拉回 rbp，那 xmm 就在 rsp-160 而不是 rsp+0。
+         * 写成 0(%rsp) 又把 rsp 加了 160，等于从压栈区里读垃圾去恢复寄存器，
+         * 还跳过了 8 次 pop —— 结果驱动一返回就跳到 0xB000。 */
+        "movdqu -160(%rbp), %xmm6\n"
+        "movdqu -144(%rbp), %xmm7\n"
+        "movdqu -128(%rbp), %xmm8\n"
+        "movdqu -112(%rbp), %xmm9\n"
+        "movdqu  -96(%rbp), %xmm10\n"
+        "movdqu  -80(%rbp), %xmm11\n"
+        "movdqu  -64(%rbp), %xmm12\n"
+        "movdqu  -48(%rbp), %xmm13\n"
+        "movdqu  -32(%rbp), %xmm14\n"
+        "movdqu  -16(%rbp), %xmm15\n"
+        "movq  %rbp, %rsp\n"
+        "popq  %r15\n"
+        "popq  %r14\n"
+        "popq  %r13\n"
+        "popq  %r12\n"
         "popq  %rsi\n"
         "popq  %rdi\n"
+        "popq  %rbp\n"
         "popq  %rbx\n"
         "retq\n"
     );
 }
-
 
 /* 本次要跑的程序参数。v1 一次只有一个程序，所以放文件级静态即可；
  * 将来有多进程时它会变成"每进程一份"。 */

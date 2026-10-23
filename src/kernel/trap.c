@@ -130,6 +130,40 @@ volatile UINT64 gTrapCr2 = 0;
                              "hlt\n");                        \
     }
 
+/* **定时器中断（向量 0x20）。**
+ *
+ * 为什么必须自己接：trap_init 把固件的 IDT 整张抄了过来，只替换了
+ * 0/6/13/14 四个向量。0x20 仍然指向固件的处理程序 —— 而 ExitBootServices
+ * 之后固件已经把那块内存交还给我们了。结果就是定时器每打断一次，
+ * 就执行一遍那块地址上的东西，被中断的指令流寄存器被踩。
+ *
+ * 症状（-d int 的日志可以证实）：
+ *   - 被中断的指令流里 %rax 变成 29 / 31 这种该循环里根本不可能的值
+ *   - 控制台偶尔丢一个字符
+ *   - RIP 有时落在一条指令的中间
+ *
+ * 这里自己接住：保存全部通用寄存器，给 PIC 和 LAPIC 都发 EOI
+ *（不知道这台机器用哪一套，两个都发是无害的），恢复，iretq。
+ * **不能只发 PIC** —— 实测屏蔽 8259 之后中断照样来，说明走的是 LAPIC。 */
+__attribute__((naked)) static void trap_irq0(void) {
+    __asm__ __volatile__(
+        "pushq %rax\n"  "pushq %rbx\n"  "pushq %rcx\n"  "pushq %rdx\n"
+        "pushq %rsi\n"  "pushq %rdi\n"  "pushq %rbp\n"  "pushq %r8\n"
+        "pushq %r9\n"   "pushq %r10\n"  "pushq %r11\n"  "pushq %r12\n"
+        "pushq %r13\n"  "pushq %r14\n"  "pushq %r15\n"
+        /* PIC EOI（主片） */
+        "movb $0x20, %al\n"
+        "outb %al, $0x20\n"
+        /* LAPIC EOI（默认基址 0xFEE00000 + 0xB0）*/
+        "movq $0xFEE000B0, %rbx\n"
+        "movl $0, (%rbx)\n"
+        "popq %r15\n"  "popq %r14\n"  "popq %r13\n"  "popq %r12\n"
+        "popq %r11\n"  "popq %r10\n"  "popq %r9\n"   "popq %r8\n"
+        "popq %rbp\n"  "popq %rdi\n"  "popq %rsi\n"  "popq %rdx\n"
+        "popq %rcx\n"  "popq %rbx\n"  "popq %rax\n"
+        "iretq\n");
+}
+
 TRAP_STUB_NOERR(trap_de,  0)    /* #DE 除零            */
 TRAP_STUB_NOERR(trap_ud,  6)    /* #UD 非法指令        */
 TRAP_STUB_ERR  (trap_gp, 13)    /* #GP 通用保护        */
@@ -275,6 +309,29 @@ int trap_init(void) {
     set_gate(6,  trap_ud);
     set_gate(13, trap_gp);
     set_gate(14, trap_pf);
+    set_gate(0x20, trap_irq0);   /* 定时器：必须自己接，见上面 trap_irq0 的注释 */
+
+    /* **把 8259 的 IRQ 全屏蔽掉。**
+     *
+     * 原因：上面的做法是把固件的 IDT 整张抄过来，只替换我们关心的四个向量。
+     * 其余 252 个（包括 0x20 定时器）仍然指向**固件的处理程序**。
+     * 而 ExitBootServices 之后，固件已经把那块内存交还给我们了 ——
+     * 定时器每打断一次，就执行一遍那块地址上的东西。
+     *
+     * 表现出来就是随机的寄存器损坏：
+     *   - 被中断的指令流里 %rax 变成 29 / 31 这种毫无来由的值
+     *   - 控制台偶尔丢一个字符
+     *   - RIP 有时落在一条指令的中间
+     * -d int 的日志里能看到 Servicing hardware INT=0x20 一直出现，
+     * 而它的 IP 落在 0x1DCC11F0（固件的地址）。
+     *
+     * 退出启动服务之后我们不需要任何固件中断，全屏蔽最干净。 */
+    __asm__ __volatile__(
+        "movb $0xFF, %%al\n"
+        "outb %%al, $0x21\n"     /* 主 PIC：IRQ0..7 全屏蔽 */
+        "outb %%al, $0xA1\n"     /* 从 PIC：IRQ8..15 全屏蔽 */
+        : : : "rax");
+    log_kv("trap", "PIC IRQs masked (0x21=0xFF, 0xA1=0xFF)");
 
     gIdtr.limit = (UINT16)(sizeof(gIdt) - 1);
     gIdtr.base  = (UINT64)(UINTN)gIdt;
