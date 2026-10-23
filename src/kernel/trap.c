@@ -60,8 +60,13 @@ volatile UINT64 gTrapCr2 = 0;
  * 同特权级的 #PF **不压 RSP/SS**（那是跨特权级才有的），所以硬件帧只有四项：
  *   [0]=errcode  [1]=RIP  [2]=CS  [3]=RFLAGS
  * ==========================================================================*/
-#define TRAP_PUSH_GPRS                                        \
-        "pushq %rax\n"                                        \
+/* **%rax 不在这里压 —— 它必须在那条 movq %cr2,%rax 之前就压好。**
+ *
+ * 桩的第一条要读 CR2，而读它就得用一个寄存器，最自然是 rax。
+ * 如果先读再压，压进去的是 CR2 而不是真正的 RAX —— 于是 exc.rax 永远是
+ * CR2 的值（#UD 的 CR2 是 0，所以看上去永远是 0）。
+ * udtest 自测抓到的：设 rax=1111 再 ud2，trap 报 0。 */
+#define TRAP_PUSH_GPRS_AFTER_RAX                              \
         "pushq %rbx\n"                                        \
         "pushq %rcx\n"                                        \
         "pushq %rdx\n"                                        \
@@ -80,9 +85,10 @@ volatile UINT64 gTrapCr2 = 0;
 /* 有出错码的：栈上已经是 [errcode][RIP][CS][RFLAGS]，15 次 push 之后帧在 +120 */
 #define TRAP_STUB_ERR(name, vec)                              \
     __attribute__((naked)) void name(void) {                  \
-        __asm__ __volatile__("movq %cr2, %rax\n"            \
+        __asm__ __volatile__("pushq %rax\n"                   \
+                             "movq %cr2, %rax\n"            \
                              "movq %rax, gTrapCr2(%rip)\n"   \
-                             TRAP_PUSH_GPRS                   \
+                             TRAP_PUSH_GPRS_AFTER_RAX                   \
                              "movq %rsp, %r8\n"              \
                              "leaq 120(%rsp), %rdx\n"        \
                              "movl $" #vec ", %ecx\n"       \
@@ -92,15 +98,31 @@ volatile UINT64 gTrapCr2 = 0;
                              "hlt\n");                        \
     }
 
-/* 不压出错码的：先补一个 0，再压寄存器，所以帧在 +128 */
+/* 不压出错码的：先补一个 0，再压 15 个寄存器。
+ *
+ * **帧指针还是 +120，不是 +128。**
+ *
+ * 算一遍：异常发生时 rsp = R，[R]=RIP [R+8]=CS [R+16]=RFLAGS。
+ *   pushq $0        -> 0 落在 R-8，正是 frame[0] 该在的位置
+ *   pushq %rax      -> R-16
+ *   再 14 次 push   -> R-128
+ *   所以 frame = R-8 = rsp + 120，和 ERR 桩一致
+ *
+ * **$0 必须先压。** 试过先压 %rax 再压 $0：rax 占了 frame[0] 的位置，
+ * 于是帧整体上移 8 字节，errcode 报成 rax。
+ *
+ * 我原来写成 +128（多算了那 8 字节两次），结果 frame 指到了 RIP 上，
+ * 于是 errcode 报成 RIP、RIP 报成 CS、CS 报成 RFLAGS —— 整体错位一格。
+ * 用 udtest 自测抓到的：故意设 rax=1111 rbx=2222 … 再 ud2，一眼看出错位。 */
 #define TRAP_STUB_NOERR(name, vec)                            \
     __attribute__((naked)) void name(void) {                  \
-        __asm__ __volatile__("movq %cr2, %rax\n"            \
+        __asm__ __volatile__("pushq $0\n"                     \
+                             "pushq %rax\n"                   \
+                             "movq %cr2, %rax\n"            \
                              "movq %rax, gTrapCr2(%rip)\n"   \
-                             "pushq $0\n"                     \
-                             TRAP_PUSH_GPRS                   \
+                             TRAP_PUSH_GPRS_AFTER_RAX                   \
                              "movq %rsp, %r8\n"              \
-                             "leaq 128(%rsp), %rdx\n"        \
+                             "leaq 120(%rsp), %rdx\n"        \
                              "movl $" #vec ", %ecx\n"       \
                              "andq $-16, %rsp\n"             \
                              "subq $0x28, %rsp\n"            \
