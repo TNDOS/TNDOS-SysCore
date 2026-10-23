@@ -16,6 +16,7 @@ static const TND_MODULE_DEF *gMods[] = {
     &gModTrap,        /* **最前**：先能看见异常，再谈别的 */
     &gModVfs,
     &gModPmm,
+    &gModPaging,   /* 只要 walk，不建也不装 —— 见 paging.c 的注释 */
     &gModHeap,
     &gModDrv,
     &gModTnx,

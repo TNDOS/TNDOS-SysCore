@@ -158,3 +158,67 @@ heap.c：
 ```
 
 **第 1 步做完，第 2 步就有工具了；第 2 步做完，SDK 的问题才有答案。**
+---
+
+## 六、页表走表（P0）已完成 —— 结论与遗留矛盾
+
+**新增 `src/kernel/paging.c`（200 行）**：
+- `paging_walk(va, out)`：走**当前** CR3（固件的表），只读。返回 Present/Level/Entry/Phys/PageSize
+- `paging_build()`：建我们自己的恒等映射表（覆盖到 4 GiB 以上，含 MMIO），**故意不装**
+- `paging_install()`：留了桩，注释写明装之前必须先解决 MMIO 缓存属性
+
+**`trap.c` 同步改了**：CR2 在汇编桩第一条指令存进全局 `gTrapCr2`；`frame[4]/[5]` 不再当 RSP/SS；
+桩从 `jmp` 改成真 `call` + 对齐 + shadow space；#PF 时自动走表并打印 CR2 / RIP / 0x28025A0。
+
+### 6.1 走表给出的硬事实
+
+```
+CR2 = 0xFFFFFFFFC7EBEC45   PML4 表项 = 0   NOT PRESENT，level 4
+RIP = 0x2800F30            PRESENT（2 MiB 页）
+0x28025A0                  PRESENT
+```
+
+**这条否掉了三个此前的判断**：不是固件页表没覆盖窗口；不是 RIP 不可靠；
+不是 gApi 住在只读段（gApi 在 DATA，flags=0x3，可写）。
+
+### 6.2 新发现：0x2800F30 上是一条不可能缺页的指令
+
+```asm
+0000000002800f20 <tnd_env>:
+   2800f20: movq gApi(%rip), %rax
+   2800f27: testq %rax, %rax
+   2800f2a: je   0x2800f3d
+   2800f2c: movq 0x38(%rax), %rax      <- api->env，读 gApi+0x38
+   2800f30: testq %rax, %rax           <- RIP 落在这里
+```
+
+**`testq %rax,%rax` 是寄存器测试，不访问内存，不可能缺页。**
+
+**而 `CR2 - 0x38 = 0xFFFFFFFFC7EBEC0D`** —— 正好是 `0x2800F2C` 那条 `movq 0x38(%rax)` 的基址。
+也就是说：**`gApi` 里是一个 32 位符号扩展出来的野值 `0xFFFFFFFFC7EBEC0D`**。
+
+### 6.3 状态槽实验：结论互相矛盾，如实记录
+
+在程序窗口最后 8 字节放了一个状态槽（栈从顶端 -64 往下长，这 8 字节不归栈用）。
+内核调用前清零、调用后读回；`tnx_entry` 的第一条语句把收到的 `api` 写进去。
+
+```
+tnx.entry.expected = 499939552
+tnx.entry.received = 499939552     match = 1    <- autoexec 里前 3 个程序
+tnx.entry.received = 0             match = 0    <- hello
+tnx.stack.present  = 1
+tnx.slot.present   = 1
+tnx.entry.present  = 1
+```
+
+**矛盾**：屏幕上明明打出了 `Hello from a TNX program` 和四项自检 OK，说明 `tnx_entry`
+进去了、`tnx_main` 跑了；但状态槽是 0，说明那条写入没生效。
+地址核对过：`__tnx_image_base = 0x2800000`，`+ 0x800000 - 8 = 0x2FFFFF8`，和内核读的完全一致。
+**这一条目前解释不了，如实留着。**
+
+### 6.4 下一步
+
+1. `tnx_entry` 里先写 `0xDEADBEEF` 再写 `api`，看槽里出现哪个值 —— 能区分没执行和被覆盖。
+2. 用 `paging_walk` 走 `0xFFFFFFFFC7EBEC0D`，确认它确实表项为 0。
+3. `tndrt.c` 单独用 `-O0` 编一次，重做状态槽实验 —— 若 `-O0` 下 `received` 正确，
+   就是编译器把那句 volatile 写入挪走了。

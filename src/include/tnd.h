@@ -420,6 +420,35 @@ void   pmm_free_pages(UINT64 addr, UINTN count);
 int    pmm_reserve(UINT64 base, UINTN pages);   /* 1 = 真的从固件手里拿到了 */
 int    pmm_selftest(void);
 
+/* ---- 页表（paging.c）----
+ *
+ * 我们从来没有自己的页表：CR0.PG 一直是 1，CR3 里是固件的表。
+ * paging_walk 走**当前** CR3，只读；paging_build 建我们自己的表但**不装**
+ * （MMIO 缓存属性没解决之前装上去会黑屏或变慢）。
+ *
+ * PAGING_WALK 记录一次走表的结果。Present=0 时 Level 指出走到第几级就断了
+ * （4=PML4 3=PDPT 2=PD 1=PT），Entry 是那一级的原始表项 —— 出问题时看这两位。 */
+typedef struct {
+    UINT64 Present;
+    UINT64 Writable;
+    UINT64 User;
+    UINT64 PageSize;     /* 0 = 4 KiB，1 = 1 GiB，2 = 2 MiB */
+    UINT64 Phys;         /* 对应到的物理地址（Present 时有效） */
+    UINT64 Level;        /* 断在哪一级 */
+    UINT64 Entry;        /* 那一级的原始表项 */
+} PAGING_WALK;
+
+extern const TND_MODULE_DEF gModPaging;
+int    paging_init(void);
+void   paging_walk(UINT64 va, PAGING_WALK *out);
+int    paging_build(void);
+int    paging_install(void);
+int    paging_active(void);
+UINT64 paging_map_end(void);
+UINT64 paging_own_cr3(void);
+UINT64 paging_pt_pages(void);
+int    paging_selftest(void);
+
 /* ============================ 内核堆（M3） =============================== */
 typedef struct {
     UINT64 Chunks;

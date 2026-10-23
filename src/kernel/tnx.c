@@ -479,7 +479,47 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
         log_kv_u64("tnx.stack.top", (UINT64)(UINTN)stackTop);
         log_kv_u64("tnx.stack.imageBase", (UINT64)imageBase);
         api_setup(gRunArgc, gRunArgv);      /* 装好 fd 0/1/2 与 argv */
-        rc = tnx_call_on_stack(stackTop, (void *)entry, api_get_table());
+
+        /* **状态槽：窗口最后 8 字节。**
+         *
+         * 栈从 stackTop（窗口末端 - 64）往下长，所以这 8 字节不归栈用。
+         * tnx_entry 的第一条指令会把"它实际收到的 api 指针"写进来。
+         * 这里调用前清零、调用后读回，和 api_get_table() 一比就知道
+         * MS->SysV 桥有没有把第三个参数传对。
+         *
+         * 起因：gApi 里出现了一个 32 位符号扩展的野值 0xFFFFFFFFC7EBEC0D，
+         * 而它只可能来自 tnx_entry 的入参。这个比对是唯一直接的判定。 */
+        {
+            volatile UINT64 *slot = (volatile UINT64 *)(UINTN)(imageBase + TNX_WINDOW_SIZE - 8);
+            /* **先确认栈顶和状态槽所在的页是映射着的。**
+             *
+             * 窗口是 8 MiB，映像只有几 KB，栈从末端往下长。但"物理内存归我们了"
+             * 不等于"固件的页表把这段虚拟地址映射了" —— 这是 AUDIT 里的怀疑 1。
+             * 如果末端没映射，callq 压返回地址的那一刻就缺页，
+             * 表现出来就是"程序还没进去就崩了"。 */
+            {
+                PAGING_WALK w;
+                paging_walk((UINT64)(UINTN)stackTop, &w);
+                log_kv_u64("tnx.stack.present", w.Present);
+                log_kv_u64("tnx.stack.entry",   w.Entry);
+                paging_walk((UINT64)(UINTN)(imageBase + TNX_WINDOW_SIZE - 8), &w);
+                log_kv_u64("tnx.slot.present", w.Present);
+                paging_walk((UINT64)(UINTN)entry, &w);
+                log_kv_u64("tnx.entry.present", w.Present);
+                log_kv_u64("tnx.entry.phys",    w.Phys);
+            }
+            UINT64 expected = (UINT64)(UINTN)api_get_table();
+            *slot = 0;
+            rc = tnx_call_on_stack(stackTop, (void *)entry, api_get_table());
+            log_kv_u64("tnx.entry.expected", expected);
+            log_kv_u64("tnx.entry.received", *slot);
+            log_kv_u64("tnx.entry.match", (*slot == expected) ? 1 : 0);
+            if (*slot != 0 && *slot != expected) {
+                con_puts("        ** tnx_entry got the wrong api pointer: ");
+                con_hex(*slot);
+                con_puts(" != "); con_hex(expected); con_puts(" **\r\n");
+            }
+        }
         api_teardown();                     /* 关掉程序忘了关的句柄 */
     }
     if (verbose || rc != 0) {

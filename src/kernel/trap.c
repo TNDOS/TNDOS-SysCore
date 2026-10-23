@@ -35,28 +35,52 @@ static TND_IDT_ENTRY gIdt[256];
 static TND_IDTR      gIdtr;
 static UINT16        gCs = 0;
 
+/* **CR2 必须在汇编桩的第一条指令就存到这里。**
+ *
+ * 如果在 C 里读，而处理函数自己又踩了坏地址，CR2 会被后一次覆盖 ——
+ * 记下来的就不是最初那次故障了。RIP 相对寻址的全局存储不碰栈，
+ * 所以可以在第一条就干。 */
+volatile UINT64 gTrapCr2 = 0;
+
 /* ------------------------------------------------------------------ 桩
  * **必须是 naked**：不然编译器会在入口插 prologue，rsp 就不是 CPU 压好的那个了，
  * frame 的偏移全错。
  *
  * 参数按 MS ABI 放：第一个在 rcx（向量号），第二个在 rdx（frame 指针）。
- * 用 jmp 不用 call —— 处理器调的入口不需要返回地址。
  *
- * 有的异常 CPU 会压一个出错码、有的不压。不压的那几个自己补一个 0，
- * 让 frame 的布局统一：frame[0]=出错码 frame[1]=RIP frame[2]=CS frame[3]=RFLAGS。 */
+ * **必须用 call 不能用 jmp。** MS ABI 要求调用方预留 32 字节 shadow space、
+ * 而且入口 16 字节对齐；硬件异常入口这两条都不保证。jmp 进去之后，
+ * 被调函数一旦 spill 到 shadow space，就会踩到异常帧。 */
+/* 有出错码的那几个：#PF 栈上是 [errcode][RIP][CS][RFLAGS]。
+ *
+ * **注意：同特权级的 #PF 不压 RSP/SS。** 那是跨特权级切换才有的。
+ * 所以 frame[4]/frame[5] 是栈上的任意内容，不能当 RSP/SS 解释 ——
+ * 这一点原来记错了，外面评审指出来的。 */
 #define TRAP_STUB_ERR(name, vec)                              \
     __attribute__((naked)) void name(void) {                  \
-        __asm__ __volatile__("movq %rsp, %rdx\n"              \
-                             "movl $" #vec ", %ecx\n"          \
-                             "jmp trap_common\n");            \
+        __asm__ __volatile__("movq %cr2, %rax\n"            \
+                             "movq %rax, gTrapCr2(%rip)\n"   \
+                             "movq %rsp, %rdx\n"             \
+                             "movl $" #vec ", %ecx\n"       \
+                             "andq $-16, %rsp\n"             \
+                             "subq $0x28, %rsp\n"            \
+                             "call trap_common\n"            \
+                             "hlt\n");                        \
     }
 
+/* 不压出错码的那几个：自己补一个 0，让帧布局统一。
+ * **补完之后才能取 frame 指针**，否则会指到补的那个 0 前面去。 */
 #define TRAP_STUB_NOERR(name, vec)                            \
     __attribute__((naked)) void name(void) {                  \
-        __asm__ __volatile__("pushq $0\n"                    \
-                             "movq %rsp, %rdx\n"              \
-                             "movl $" #vec ", %ecx\n"          \
-                             "jmp trap_common\n");            \
+        __asm__ __volatile__("movq %cr2, %rax\n"            \
+                             "movq %rax, gTrapCr2(%rip)\n"   \
+                             "pushq $0\n"                     \
+                             "movq %rsp, %rdx\n"             \
+                             "movl $" #vec ", %ecx\n"       \
+                             "andq $-16, %rsp\n"             \
+                             "subq $0x28, %rsp\n"            \
+                             "call trap_common\n"            \
+                             "hlt\n");                        \
     }
 
 TRAP_STUB_NOERR(trap_de,  0)    /* #DE 除零            */
@@ -77,14 +101,10 @@ static const char *trap_name(UINT64 v) {
 /* ------------------------------------------------------------------ 公共处理
  * 只打印然后停机。**不要试图返回** —— 返回就是重新执行那条出错指令。 */
 void trap_common(UINT64 vec, UINT64 *frame) {
-    UINT64 cr2 = 0;
-    UINT64 rsp = 0, rbp = 0;
-    __asm__ __volatile__("movq %%cr2, %0" : "=r"(cr2));
-    /* **rsp / rbp 必须一起记。**
-     * 只记 cr2 的话，就只能反推 rbp，而反推依赖"故障指令是 rbp-0x44"这个假设 ——
-     * 那次我就靠这个假设走错了方向（还把 cr2 抄成了 17 位）。 */
-    __asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));
-    __asm__ __volatile__("movq %%rbp, %0" : "=r"(rbp));
+    UINT64 cr3 = 0;
+    /* CR2 由汇编桩第一条指令存进 gTrapCr2 —— **不在这里读**。
+     * 原因见 gTrapCr2 的注释：在 C 里读会被二次缺页覆盖。 */
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
 
     /* 先写日志 —— 控制台可能已经不可靠了，日志更稳 */
     log_puts("[log] *** CPU EXCEPTION \"");
@@ -95,9 +115,30 @@ void trap_common(UINT64 vec, UINT64 *frame) {
     log_kv_u64("exc.rip",     frame[1]);
     log_kv_u64("exc.cs",      frame[2]);
     log_kv_u64("exc.rflags",  frame[3]);
-    log_kv_u64("exc.cr2",     cr2);
-    log_kv_u64("exc.rsp",     rsp);
-    log_kv_u64("exc.rbp",     rbp);
+    /* 硬件帧只有四项（errcode/RIP/CS/RFLAGS）。frame[4]/[5] 不再解释为 RSP/SS。 */
+    log_kv_u64("exc.cr2",     gTrapCr2);
+    log_kv_u64("exc.cr3",     cr3);
+    log_kv_u64("exc.frame_ptr",(UINT64)(UINTN)frame);
+
+    /* **走一遍页表。** 这是 AUDIT 的 P0 —— 它把"这个地址到底映没映射"
+     * 从推演变成事实。走的是当前 CR3（也就是固件那张表），只读。 */
+    {
+        PAGING_WALK w;
+        paging_walk(gTrapCr2, &w);
+        log_kv_u64("pf.cr2.present", w.Present);
+        log_kv_u64("pf.cr2.level",   w.Level);
+        log_kv_u64("pf.cr2.entry",   w.Entry);
+        log_kv_u64("pf.cr2.phys",    w.Phys);
+        paging_walk(frame[1], &w);
+        log_kv_u64("pf.rip.present", w.Present);
+        log_kv_u64("pf.rip.level",   w.Level);
+        log_kv_u64("pf.rip.entry",   w.Entry);
+        log_kv_u64("pf.rip.phys",    w.Phys);
+        paging_walk(0x28025A0ULL, &w);
+        log_kv_u64("pf.gapi.present", w.Present);
+        log_kv_u64("pf.gapi.entry",   w.Entry);
+        log_kv_u64("pf.gapi.phys",    w.Phys);
+    }
 
     con_puts("\r\n\r\n  *** CPU EXCEPTION ***\r\n");
     con_puts("      vector : "); con_u64(vec);
@@ -107,10 +148,26 @@ void trap_common(UINT64 vec, UINT64 *frame) {
     con_puts("      CS     : "); con_hex(frame[2]); con_puts("\r\n");
     con_puts("      RFLAGS : "); con_hex(frame[3]); con_puts("\r\n");
     if (vec == 14) {
-        con_puts("      CR2    : "); con_hex(cr2);
+        PAGING_WALK w;
+        con_puts("      CR2    : "); con_hex(gTrapCr2);
         con_puts("   <- faulting address\r\n");
-        con_puts("      RSP    : "); con_hex(rsp); con_puts("\r\n");
-        con_puts("      RBP    : "); con_hex(rbp); con_puts("\r\n");
+        con_puts("      CR3    : "); con_hex(cr3); con_puts("\r\n");
+        /* 这几行才是关键：地址到底映没映射，由页表回答，不由推演回答 */
+        paging_walk(gTrapCr2, &w);
+        con_puts("      CR2 map: ");
+        if (w.Present) { con_puts("PRESENT -> "); con_hex(w.Phys); }
+        else           { con_puts("NOT PRESENT, level "); con_u64(w.Level); con_puts(", entry "); con_hex(w.Entry); }
+        con_puts("\r\n");
+        paging_walk(frame[1], &w);
+        con_puts("      RIP map: ");
+        if (w.Present) { con_puts("PRESENT -> "); con_hex(w.Phys); }
+        else           { con_puts("NOT PRESENT, level "); con_u64(w.Level); con_puts(", entry "); con_hex(w.Entry); }
+        con_puts("\r\n");
+        paging_walk(0x28025A0ULL, &w);
+        con_puts("      28025A0: ");
+        if (w.Present) { con_puts("PRESENT -> "); con_hex(w.Phys); }
+        else           { con_puts("NOT PRESENT, level "); con_u64(w.Level); }
+        con_puts("\r\n");
     }
     con_puts("      (halted, not resuming)\r\n");
 
