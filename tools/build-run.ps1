@@ -209,8 +209,6 @@ Build-Pe (@((Join-Path $Root 'src\kernel\kernel.c'),
                           (Join-Path $Root 'src\kernel\pci.c'),
 (Join-Path $Root 'src\kernel\blk.c'),
              (Join-Path $Root 'src\kernel\fat.c'),
-             $(if ($FatFsDir) { Join-Path $FatFsDir 'ff.c' } else { '' }),
-             $(if ($FatFsDir) { Join-Path $FatFsDir 'fatfs_glue.c' } else { '' }),
              (Join-Path $Root 'src\kernel\fbwc.c'),
              (Join-Path $Root 'src\lib\time.c')) + $LibSrc) (Join-Path $TndDir 'kernel.efi')
 

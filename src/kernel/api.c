@@ -15,7 +15,7 @@
  * ==========================================================================*/
 #include "tnd.h"
 #include "tnd_api.h"
-#include "ff.h"      /* 目录遍历走 FatFs —— 退出之后固件的 SFS 已经不可用了 */
+/* 目录遍历现在走自己的 FAT 驱动（fat_enum），不再包含 FatFs。 */
 
 #define TND_MAX_FDS 16
 
@@ -286,32 +286,28 @@ static TND_ABI int api_findfirst(const char *pattern, TND_FIND *out) {
 
     /* **FatFs 优先。** 见上面那段注释。 */
     if (fat_ready()) {
-        DIR     dh;
-        FILINFO fi;
-        char    ap[TND_MAX_PATH];
-        int     n = 0;
+        /* **走自己的 FAT 驱动**，不再经过 FatFs。
+         * fat_enum 按序号取第 n 项，所以这里带一个递增的 idx ——
+         * 名字被通配符过滤掉时序号照样前进，不会漏项。 */
+        char    nm[TND_NAME_MAX];
+        UINT32  at = 0, sz = 0;
+        int     n = 0, idx = 0;
 
-        fat_resolve(dir, ap, sizeof(ap));
-        if (f_opendir(&dh, ap) == FR_OK) {
-            for (;;) {
-                if (f_readdir(&dh, &fi) != FR_OK || fi.fname[0] == 0) break;
-                if (!t_strcmp(fi.fname, ".") || !t_strcmp(fi.fname, "..")) continue;
-                if (n >= FIND_LIST_MAX) break;
-                {
-                    UINTN i;
-                    for (i = 0; fi.fname[i] && i < TND_NAME_MAX - 1; i++) {
-                        char c = fi.fname[i];
-                        gFindList[n].Name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
-                    }
-                    gFindList[n].Name[i] = 0;
-                }
-                if (!wild_match(pat, gFindList[n].Name)) continue;
-                gFindList[n].Size = (tnd_u32)fi.fsize;
-                gFindList[n].Attr = (fi.fattrib & AM_DIR) ? TND_ATTR_DIR : 0;
-                gFindList[n].Reserved = 0;
-                n++;
+        while (n < FIND_LIST_MAX) {
+            UINTN i;
+            if (!fat_enum(dir, idx, nm, sizeof(nm), &at, &sz)) break;
+            idx++;
+            if (!t_strcmp(nm, ".") || !t_strcmp(nm, "..")) continue;
+            for (i = 0; nm[i] && i < TND_NAME_MAX - 1; i++) {
+                char c = nm[i];
+                gFindList[n].Name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
             }
-            f_closedir(&dh);
+            gFindList[n].Name[i] = 0;
+            if (!wild_match(pat, gFindList[n].Name)) continue;
+            gFindList[n].Size = (tnd_u32)sz;
+            gFindList[n].Attr = at;
+            gFindList[n].Reserved = 0;
+            n++;
         }
         gFindCount = n;
         gFindIdx = 0;

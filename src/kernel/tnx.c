@@ -175,7 +175,7 @@ static EFI_STATUS read_whole(const char *path, void **out, UINTN *outSize) {
      * 固件那条路在我们自己写过盘之后就坏了（EFI_MEDIA_CHANGED），
      * 而 TNX 程序映像必须读得到 —— 否则屏幕上只剩一句
      * "Bad command or file name"，文件明明就在目录里。 */
-    if (fat_ready()) {
+    if (fat_mount_any()) {
         int rc = fat_read_alloc(path, &buf, &size);
         if (rc == 0) { *out = buf; *outSize = size; return EFI_SUCCESS; }
         log_puts("[log] tnx: fat_read_alloc failed rc="); log_u64((UINT64)rc);

@@ -14,7 +14,6 @@
  * interface unchanged.
  * ==========================================================================*/
 #include "tnd.h"
-#include "ff.h"      /* f_chdir / f_getcwd，cd 要用 */
 
 #define TND_MAX_DRIVES 26          /* A..Z —— 一块盘上多个分区是常态，4 个不够 */
 #define TND_MAX_COMPS  32
@@ -429,8 +428,7 @@ int vfs_dir(const char *dos) {
      * 所以每次进来都问一句"挂上了吗，没挂就再试" —— blk 是幂等的，
      * 重复尝试的代价只是几次扇区读。 */
     if (!fat_ready()) {
-        int bi, bn = blk_count();
-        for (bi = 0; bi < bn && !fat_ready(); bi++) fat_mount(bi);
+        (void)fat_mount_any();
         /* **挂上之后立刻把 shell 的当前目录同步给 FatFs。**
          *
          * 这两个是**两个**当前目录：gCwd 是 shell 的（vfs_init 里设成 EFITNDOS），
@@ -439,7 +437,6 @@ int vfs_dir(const char *dos) {
          * 表头写 "Directory of C:." 看起来还挺像回事。
          *
          * 实测就是这么发现的：C:EFITNDOS> dir 列出了根目录的三个条目。 */
-        (void)f_chdir(gCwd);
     }
     if (fat_ready()) {
         /* **把参数传下去。** 原来这里写的是 (void)dos + fat_report()，
@@ -631,16 +628,34 @@ int vfs_chdir(const char *dos) {
      * 事后极难查。让它告诉我们它到底在哪。
      * ================================================================ */
     if (fat_ready()) {
-        FRESULT fr = f_chdir(dos[0] ? dos : "/");
-        if (fr != FR_OK) {
-            con_puts("  cannot change directory, FRESULT=");
-            con_u64((UINT64)fr);
-            con_puts("\r\n");
+        /* **不再用 f_chdir / f_getcwd。**
+         *
+         * 新的 FAT 驱动是无状态的：所有函数都收绝对路径，当前目录由 vfs
+         * 自己那份 gCwd 维护。这样只有**一个**当前目录，不会出现
+         * "gCwd 说在 A、驱动说在 B" 那种两个真相的局面。
+         *
+         * 路径规范化（. / .. / 多余分隔符）统一在 fat_resolve 里做 ——
+         * 规则只有一份，调用方不用各写一遍。 */
+        char abs[TND_MAX_PATH];
+        char joined[TND_MAX_PATH];
+
+        if (dos[0] == 92 || dos[0] == 47) {
+            fat_resolve(dos, abs, sizeof(abs));
+        } else {
+            UINTN l;
+            t_strncpy(joined, gCwd, sizeof(joined));
+            l = t_strlen(joined);
+            if (l + 1 < sizeof(joined)) { joined[l] = 92; joined[l + 1] = 0; }
+            t_strncpy(joined + t_strlen(joined), dos, sizeof(joined) - t_strlen(joined));
+            fat_resolve(joined, abs, sizeof(abs));
+        }
+
+        if (!(abs[0] == 92 && abs[1] == 0) && !fat_exists(abs)) {
+            con_puts("  invalid directory\r\n");
             return 0;
         }
-        if (f_getcwd(gCwd, (UINT)TND_MAX_PATH) != FR_OK) t_strncpy(gCwd, "\\", TND_MAX_PATH);
-        return 1;
-    }
+        t_strncpy(gCwd, abs, TND_MAX_PATH);
+        return 1;    }
 
     s = vfs_resolve(dos, path, sizeof(path));
     if (EFI_ERROR(s)) { con_puts("  invalid path\r\n"); return 0; }
