@@ -684,10 +684,16 @@ void shell_exec_line(char *line) {
                         for (i = 0; i < n && !fat_ready(); i++) fat_mount(i);
                     if (!fat_ready()) {
                         con_puts("    fat           : ** not found on any of them **\r\n");
-                        con_puts("    the volume may be FAT32 (this reader is FAT16 only).\r\n");
+                        con_puts("    our FAT driver does FAT12 / FAT16 / FAT32, so this is not\r\n");
+                        con_puts("    a filesystem-type problem -- the volume is probably not\r\n");
+                        con_puts("    where the partition table says it is.\r\n");
                     } else {
+                        /* **这里原来调 fat_report()，也就是打一整屏 dir。**
+                         * 那是为了「退出之后一次看全三层」，但 dir 本身在退出之后
+                         * 照样能敲（命令行是活的），所以它把「确认接管成功」这件事
+                         * 淹没了 —— 看起来像 autoexec 又跑了一遍。
+                         * 一行就够：挂上了。想看目录自己敲 DIR。 */
                         con_puts("    fat           : mounted\r\n");
-                        fat_report();
                     }
                 }
             }
