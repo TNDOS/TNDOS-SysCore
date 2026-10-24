@@ -19,21 +19,18 @@
 
 ## 已引入 Components in use
 
-### FatFs R0.16
+### 已移除 Removed: FatFs R0.16
 
-```
-来源    http://elm-chan.org/fsw/ff/   (ChaN)
-版本    R0.16, 2025-07-22
-位置    repos/TNDOS-SDK/third_party/fatfs/
-许可证   FatFs License（BSD 风格，宽松）
-        原文见 source/ff.h 文件头的 "FatFs - Generic FAT Filesystem module" 段落
-改动    1  ffconf.h 改了五项配置（READONLY=1 / CODE_PAGE=437 / FS_RPATH=2 /
-           FS_NORTC=1 / USE_LFN=0）—— 只改配置，不改代码
-        2  ff.c、ff.h、diskio.h **一个字都没改**
-        3  新增 fatfs_glue.c / fatfs_tnd.h —— 这是我们自己的接合层，MIT
-状态    ff.c / fatfs_glue.c 单独编译通过；**尚未接入内核构建列表**
-注意    R0.16 官方有 patch-1 / patch-2，ZIP 里不含。拿到后记在本文件下。
-```
+| 项目 | 内容 |
+|---|---|
+| 来源 | FatFs（ChaN）R0.16 |
+| 曾位于 | repos/TNDOS-SDK/third_party/fatfs/ |
+| 移除版本 | 0.3.2-M4-SP2.5 |
+| 原因 | 移植层在读取跨多个簇的文件时交出了错误数据，导致 TNX 程序映像被写坏。详见 docs/FATFS.md |
+| 现状 | 源码已从仓库删除；构建列表里不再有 ff.c / fatfs_glue.c；发布包里也不会再出现 |
+
+**许可证义务随之结束** —— 我们不再分发它。
+自研的 FAT12/16/32 驱动是本项目自己的代码，仍按 MIT 发布。
 
 ## 计划引入 Planned
 
