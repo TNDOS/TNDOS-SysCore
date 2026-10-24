@@ -619,6 +619,18 @@ void shell_exec_line(char *line) {
      * 上真机之前该看到的正是这张单子，而不是退出之后才发现键盘没了。
      * ================================================================== */
     if (!t_stricmp(cmd, "EXITBOOT")) {
+        /* **已经退过了就直接说清楚，别把同一段话再打一遍。**
+         *
+         * tnd_exit_boot() 对第二次调用是静默返回 0 —— 幂等本身是对的，
+         * 但屏幕上会把整段「已接管 + 自检」重放一遍，看起来像又退了一次，
+         * 而实际什么都没发生。
+         *
+         * 不可逆的操作重复执行必须显式说明「这次没执行」，
+         * 否则用户会以为第二次也生效了。 */
+        if (gBsGone) {
+            con_puts("\r\n  已退出启动模式，本指令不再执行\r\n\r\n");
+            return;
+        }
         con_puts("\r\n  [EXITBOOT] ExitBootServices -- IRREVERSIBLE\r\n");
         con_puts("  ---- console backends (* = active right now) ----\r\n");
         con_report();
