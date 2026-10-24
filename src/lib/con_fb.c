@@ -206,8 +206,19 @@ static void fb_copy_nt(UINT32 *dst, const UINT32 *src, UINTN bytes) {
     __asm__ __volatile__("sfence" ::: "memory");
 }
 
+/* 前向声明 —— 这两个实现在文件后半（fb_put_cp 旁边），但 fb_scroll 更早用 */
+static UINT64 t_irq_save(void);
+static void   t_irq_restore(UINT64 f);
+
 static void fb_scroll(void) {
+    UINT64 irqf;
+
     if (gFb.rows < 2) return;
+
+    /* **滚屏也必须原子。** 它搬整块 shadow 和整屏像素 ——
+     * 中间被中断插进来做一次控制台输出，屏幕上就会出现一条错位的横带。
+     * fb_put_cp 已经夹过一次了，这里是给 fb_write 的换行路径兜底。 */
+    irqf = t_irq_save();
     t_memcpy(gFb.shadow, gFb.shadow + gFb.cols, gFb.cols * (gFb.rows - 1) * sizeof(FB_CELL));
     /* **不能用 t_memzero** —— Ch=0 的含义是"全角右半格，不用画"，
      * 清零会让最后一行永远不重画，旧像素留着，屏幕逐渐糊成一团。
@@ -236,6 +247,8 @@ static void fb_scroll(void) {
         if (keep) fb_copy_nt(gFb.fb, gFb.fb + shift, keep * sizeof(UINT32));
     }
     for (UINTN cx = 0; cx < gFb.cols; cx++) fb_draw_cell(cx, gFb.rows - 1);
+
+    t_irq_restore(irqf);
 }
 
 /* ------------------------------------------------------------------ 接口 */
@@ -391,13 +404,50 @@ static void fb_newline(void) {
     if (++gFb.y >= gFb.rows) { gFb.y = gFb.rows - 1; fb_scroll(); }
 }
 
+/* ------------------------------------------------------------ 关中断
+ *
+ * **控制台的状态更新必须和中断互斥。**
+ *
+ * 曾经偶发过一个坏字符：屏幕上 `AUTOEXEC` 被打成 `OUTOEXEC`，
+ * 而二进制里的字符串是对的（已验证）。机制就是定时器中断正好落进
+ * fb_put_cp 的 "写 shadow -> 画格子 -> x++" 中间 —— 中断处理如果也往
+ * 控制台写，x 和 shadow 就被打乱了。
+ *
+ * 所以这几步用 cli/sti 夹起来。**必须保存原来的 IF**：如果本函数是在
+ * 中断处理里被调的（比如异常处理要打日志），无脑 sti 会把上下文搞坏。
+ *
+ * 代价是几十个时钟周期 —— 换"控制台输出永远不被打断"，值。 */
+static UINT64 t_irq_save(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    UINT64 f;
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(f) : : "memory");
+    return f;
+#else
+    return 0;
+#endif
+}
+
+static void t_irq_restore(UINT64 f) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    if (f & 0x200ULL) __asm__ __volatile__("sti" : : : "memory");
+#else
+    (void)f;
+#endif
+}
+
 /* 把一个码点放进当前格。
  * **这就是"宽字符"的全部**：字宽决定占几格，字体只决定长什么样。
  * 所以 CJK 点阵字体到位之前，排版就已经是对的了。 */
 static void fb_put_cp(UINT32 cp) {
-    int w = t_char_width(cp);
+    int    w = t_char_width(cp);
+    UINT64 irqf;
 
     if (w == 0) return;                 /* 组合字符：暂不叠加，也不占格 */
+
+    /* **从这里到函数末尾，中断是关的。**
+     * 原因见 t_irq_save 上面的注释：写 shadow、画格子、挪 x 这三步必须原子，
+     * 否则中断处理里的一次控制台输出就能把这一格弄乱。 */
+    irqf = t_irq_save();
 
     if (w == 2) {
         /* 右边那一格放不下就整体换行 —— 全角字符被拆开比换行难看得多 */
@@ -427,6 +477,8 @@ static void fb_put_cp(UINT32 cp) {
      * 而且这个 bug 只在 cols 小到某个阈值以下才出现，所以 1.5 好好的、
      * 1.75 就坏了。 */
     if (gFb.x >= gFb.cols) { gFb.x = gFb.cols - 1; gFb.pending = 1; }
+
+    t_irq_restore(irqf);
 }
 
 static void fb_write(const char *s, UINTN n) {
