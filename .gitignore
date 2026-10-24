@@ -1,4 +1,4 @@
-﻿# TNDDOS 构建产物：ESP 目录树 / FAT16 磁盘映像 / 串口日志 / OVMF 变量存储
+# TNDDOS 构建产物：ESP 目录树 / FAT16 磁盘映像 / 串口日志 / OVMF 变量存储
 /build/
 
 # 同级仓库的暂存目录（SDK / ToolKit 各自有独立的 .git，不属于本仓库）
@@ -6,9 +6,13 @@
 
 # 磁盘映像、日志、固件
 *.img
+*.vhd
 *.log
 *.fd
 *.bundle
+
+# 发行成品目录（tools/make-vhd.ps1 的输出）—— 成品走 Releases，不进仓库
+/dist/
 
 # 编辑器
 .vs/
