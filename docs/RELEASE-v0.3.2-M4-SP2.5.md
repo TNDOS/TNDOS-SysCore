@@ -251,3 +251,309 @@ docs/THIRD-PARTY.md     第三方代码与许可证
 docs/I18N.md            写作与本地化约定
 docs/FATFS.md           FAT 层：从 FatFs 到自研（取证过程 + 三个实现坑）
 ```
+
+<details>
+<summary>English</summary>
+
+# 0.3.2-M4-SP2.5 -- the file system is ours
+
+> In one line: **driver development moved into the SDK, NVMe gained a write path,
+> and the file system went from FatFs to a FAT12/16/32 driver we wrote.**
+
+## What this version does
+
+### 1 Driver development moves into the SDK
+
+A TNX driver is no longer a block of code inside the kernel; it is a separate
+artifact built by the SDK:
+
+```
+repos/TNDOS-SDK/drivers/               one directory and one source file per driver
+repos/TNDOS-SDK/tools/build-tnx.ps1    shared compile / link / pack arguments
+repos/TNDOS-SDK/linker/tnx.ld          the TNX linker script
+repos/TNDOS-SDK/third_party/           third-party code, each with its own licence
+```
+
+Drivers use the TNX format and **do not go through the firmware's LoadImage** --
+that is the precondition for surviving ExitBootServices.
+
+Several drivers can coexist: each gets its own 1 MiB window slot (eight slots),
+and loading into an occupied slot is rejected. This fixed a very quiet crash:
+every driver used to link at the same base `0x2000000`, so loading a second one
+overwrote the first entirely. The symptom was "calling the first driver's callback
+jumps into a function prologue" -- `55 48 89 E5` visible at the RIP.
+
+### 2 FAT: FatFs was adopted, then deleted
+
+The FAT layer went the full way round in this version, and the final form is a
+**driver of our own**.
+
+**Step one: pull FatFs R0.16 into the kernel**, replacing the old reader that
+understood FAT16 and nothing else. FatFs has FAT12/16/32, subdirectories and long
+file names, so it looked like a bargain.
+
+**Step two: find out it is unreliable for this job.** The symptom was that TNX
+programs ran when small and always crashed when large:
+
+```
+HELLO.TNX    9588 bytes   fine
+TREE.TNX     7556 bytes   fine
+STRESS.TNX  27888 bytes   always crashes
+CJK16.FNT  855624 bytes   cannot be read (Chinese silently falls back to the
+                          built-in 8x12 ASCII glyphs)
+```
+
+The crash was the most misleading kind: **an instruction that cannot possibly
+fail raised #GP**. Disassembly showed `testq %rax,%rax` at that address, and that
+instruction does not fault.
+
+The evidence came from QEMU's `pmemsave`: run `stop`, dump the program window,
+and byte-compare it against the TNX image. Then make the loader print the
+**source** (the buffer read from disk) and the **destination** (the live image),
+side by side:
+
+```
+tnx.src.f30  == tnx.dst.f30       <- the copy is faithful
+tnx.src.1f30 == tnx.dst.1f30
+```
+
+The copy was not the problem. **The source was already wrong.** Comparing the
+source against the file on disk:
+
+```
+disk  file[0xFE0]:  00 00 48 89 DF E8 F6 08
+ram   buf[0xFE0]:   89 45 F0 EB B9 8B 45 BC     <- different
+```
+
+`f_read` returned success, `br` equalled the file length, `FRESULT` was `FR_OK`
+-- **and the contents were still wrong**.
+
+**Step three: delete it and write our own.** The fault sits in the port's
+boundary handling between the cluster chain, the sector cache and cross-cluster
+reads. This layer only ever needed to do one thing: walk the cluster chain and
+read the sectors.
+
+```
+removed   the whole third_party/fatfs tree (ff.c / ff.h / diskio.h / ffconf.h)
+          third_party/fatfs/source/fatfs_glue.c and fatfs_tnd.h
+          ff.c and fatfs_glue.c from the build list
+          the FatFs copy step in the release packaging
+added     src/kernel/fat.c -- 1064 lines, FAT12/16/32
+effect    kernel.efi 139776 -> 134656 bytes (5 KB smaller)
+          one fewer third-party component; its licence obligation ends
+```
+
+The replacement covers the same ground:
+
+```
+mount     GPT -> MBR -> probe; parse the BPB; type decided by cluster count
+          (the Microsoft rule), not by FAT size
+FAT       FAT12 twelve-bit packing (including entries that straddle a sector
+          boundary), FAT16 and FAT32; both read and write
+directory cluster-chain walk, 8.3 short names, LFN entries skipped, volume label
+read      fat_read_alloc / fat_read_text
+write     fat_mkdir / fat_unlink / fat_rename / fat_copy
+list      reproduces cmd's dir layout (label / serial / dates / thousands
+          separators / File(s) / Dir(s))
+enumerate fat_enum -- backs api.c's findfirst/findnext
+selftest  fat_selftest: create / write / read back / compare / delete
+```
+
+**Only 512-byte sectors are supported.** Any other size is rejected instead of
+guessed -- quietly assuming 512 produces misaligned data, which is far harder to
+find than a refusal.
+
+`dir` follows cmd's layout:
+
+```
+ Volume in drive C is TNDDOS
+ Volume Serial Number is 0000-0000
+ Directory of C:\EFI\TNDOS
+
+2026/10/24  12:03    <DIR>          FONTS
+2026/10/24  12:03            27,888 STRESS.TNX
+               18 File(s)        246,509 bytes
+                3 Dir(s)      60,571,648 bytes free
+```
+
+(The serial reads 0000-0000 because the FAT32 image generator does not write BPB
+offset 39. It is a display-only issue.)
+
+### 3 NVMe
+
+A driver of our own, built from **the part of the specification that is actually
+used**:
+
+```
+controller reset -> wait for ready -> admin queues
+-> Identify Controller / Namespace
+-> create I/O completion and submission queues -> read and write commands
+```
+
+Read and write share one function, `nvme_rw(opcode, ...)`: read is `0x02`, write
+is `0x01`, every other field is identical. Two copies of that code would drift
+the first time one of them is touched.
+
+One constraint worth remembering: `nvme_rw` fills PRP1 only (PRP2 is always 0),
+so the data of a single command **must stay inside one 4 KB page**. File system
+buffers are not page aligned, so the driver splits work into 512-byte chunks --
+a single sector is always inside one page.
+
+### 4 The write path
+
+```
+NVMe write command 0x01
+blk_write           a read-only device returns -4 ("cannot write" and "write
+                    failed" are two different answers)
+TND_BLOCK.Write     API v2.8, may be NULL
+fat_write           our own FAT write path -> blk_write
+```
+
+### 5 Console: the scroll and the cell write are now atomic
+
+A garbled character showed up once: `AUTOEXEC` was printed as `OUTOEXEC`, while
+the string inside the binary was intact (verified byte by byte). The mechanism is
+a timer interrupt landing exactly inside "write the shadow cell -> blit the glyph
+-> advance the cursor".
+
+```c
+irqf = t_irq_save();      // pushfq; popq; cli
+...shadow write / glyph blit / x++...
+t_irq_restore(irqf);      // sti only if IF was set on entry
+```
+
+`fb_scroll` is guarded too: `fb_write` calls it directly on a newline, bypassing
+`fb_put_cp`. **The incoming IF must be preserved** -- this code also runs inside
+the trap handler, and re-enabling interrupts there would corrupt the context.
+
+### 6 The font reads through our own file system
+
+The font is loaded **after** `ExitBootServices` (`CONSOLE fb` runs from
+autoexec), by which time the firmware's SimpleFileSystem no longer exists -- so
+the 836 KB CJK font could not be read, and Chinese silently fell back to the
+built-in 8x12 ASCII glyphs.
+
+`font.c` lives in LibSrc (both the bootloader and the kernel compile it), so it
+cannot depend on the kernel's FAT driver directly. It takes a function pointer,
+`t_font_read_hook`, which the kernel points at `fat_read_alloc` from `vfs_init`.
+
+```
+[log] font: loaded \EFI\TNDOS\FONTS\CJK16.FNT  cell=16x8/16  glyphs=21427  bytes=855624
+```
+
+### 7 Release format: img -> VHD
+
+**From this version on, and until an ISO build exists, Releases ship a `.vhd`
+instead of a raw `.img`.**
+
+```
+before  TNDDOS-<version>-x86_64.img    raw disk image; dd it or loop-mount it
+now     TNDDOS-<version>-x86_64.vhd    double-click to mount or unmount on Windows
+```
+
+The contents are identical (GPT + ESP + FAT); only the container changed. A raw
+img needs extra mounting tools on Windows, while VHD is handled natively.
+
+**When this is reverted**: once an ISO build exists (El Torito plus our own boot
+chain) the release artifact should be an ISO, and VHD drops back to being the
+"install onto a disk" companion format.
+
+## Verified (QEMU)
+
+```
+C:\EFI\TNDOS>hello
+  argc = 1   argv[0] = hello          argv is wired up -> OK
+  stat(HELLO.TNX) -> OK               size = 9588
+  read 255 bytes from AUTOEXEC.BAT; first line: @echo off
+  open/read/close a real file -> OK
+  [wide] 4 cells for two wide characters; A = 1 cell
+  all checks passed
+
+C:\EFI\TNDOS>stress
+  [PASS] md5 of empty string / md5 of abc
+  [PASS] aes128 FIPS-197 C.1 / decrypt round-trip / ctr round-trip
+  [PASS] inflate no error / output length / content
+  [PASS] inflate loop had no failures
+  [PASS] heap churn kept contents
+  ALL CHECKS PASSED
+
+C:\EFI\TNDOS>constest
+  patterned rows: 48   mismatching: 0
+  ALL PATTERNED ROWS ARE PIXEL-IDENTICAL
+
+  autoexec.bat completes all 97 lines; zero CPU exceptions throughout
+```
+
+`constest` is the console stress tool added in this version: it floods the screen
+with a period-16 pattern (`0123456789ABCDEF`) for 1800 lines, then 400 lines of
+CJK, and finally compares every visible row pixel by pixel -- each one must match
+the reference row exactly. It does not say "looks fine", it **measures**.
+
+## Known limitations
+
+### Real hardware: a laptop vendor's hardware RAID has no solution
+
+**This version still only runs on machines where the firmware can see the disk
+directly.**
+
+```
+works     NVMe without RAID, AHCI mode, QEMU's nvme/ahci devices
+fails     the vendor hardware RAID most laptops ship with by default
+          (Intel RST, RAID On, various OEM volume managers)
+symptom   the firmware sees the disk, we do not -- no block device registers and
+          the FAT volume never mounts
+```
+
+The management interface of those arrays is **proprietary** (some also require a
+specific protocol inside the UEFI driver stack), with no public specification to
+follow. The answer today is to leave them alone: switch the machine to AHCI or
+passthrough mode.
+
+**This is not a pending fix, it is "no known solution"** -- recorded here so the
+next person does not spend another night treating it as a bug.
+
+### Other
+
+```
+- FAT parses 8.3 short names only; LFN entries are skipped, so long file names
+  would need separate work
+- the volume serial shows 0000-0000 on our own images (the FAT32 generator does
+  not write BPB offset 39)
+- writes have no power-loss consistency; this is not a journalling file system
+- AHCI.TNX fails to load; the NVMe path is unaffected
+- IDE (PATA) is not ported (OpenBSD's pciide.c is registered in the licence
+  inventory but not wired in)
+- paging_install() is still a stub: installing our own CR3 needs MMIO cache
+  attribute handling first
+```
+
+## Licences
+
+The project itself is MIT. Third-party components keep their own licences, all
+listed in `docs/THIRD-PARTY.md`:
+
+```
+OpenBSD nvme.c     ISC   (imported, not wired in)
+OpenBSD ahci.c     ISC   (imported, not wired in)
+OpenBSD pciide.c   ISC   (imported, not wired in)
+=====================================================================
+FatFs R0.16        removed in this version -- no longer distributed, so the
+                   licence obligation ends with it
+```
+
+Copyright notices are kept verbatim, not one word changed.
+
+## Related documents
+
+```
+docs/MACHINE.md         target machine profile (ASUS TUF A16 / Ryzen AI 9 HX 370
+                        / the ESP is FAT32)
+docs/DECISIONS.md       the four architectural decisions
+docs/TRANSITIONAL.md    transitional-code rules and the 109-item inventory
+docs/THIRD-PARTY.md     third-party code and licences
+docs/I18N.md            writing and localisation rules
+docs/FATFS.md           the FAT layer: from FatFs to our own (evidence trail and
+                        the three implementation traps)
+```
+
+</details>

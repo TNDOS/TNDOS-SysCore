@@ -114,3 +114,149 @@ IDT + 异常处理（第一次真正写架构相关代码，顺带立 `src/arch/
 然后是自有 FAT 驱动 —— **没有它就别想离开 UEFI**。
 
 工程约定与完整功能清单见仓库里的 `CONTRIBUTING.md` 和 `TNDOS-目标清单.txt`。
+
+<details>
+<summary>English</summary>
+
+# TNDDOS 0.3.2-M4-SP1
+
+**Chinese is on screen.**
+
+This release takes the console completely out of the firmware's hands, and for the
+first time lets TNDDOS display Chinese. It is still UEFI-only, single-tasking and
+unprotected -- but the screen, the font and the clock are now our own.
+
+The previous version had not yet settled on its development goal and could not be
+considered a finished product. Our apologies.
+
+---
+
+## What this version does
+
+### 1. The console now has the notion of a backend
+
+The kernel is no longer hard-wired to UEFI's ConOut. `TND_CONSOLE` is a set of
+swappable backends:
+
+- `uefi` -- the original ConOut. Not one behaviour changed; it was merely moved
+  behind the interface.
+- `fb` -- **writes its own pixels into the framebuffer**, with its own bitmap font.
+
+Switch between them at any time with `CONSOLE fb` / `CONSOLE uefi`.
+
+Why it matters: ConOut is a Boot Service, so it and its font disappear the moment
+`ExitBootServices` runs -- while the framebuffer's **memory** is still there.
+Taking over output first is what makes leaving UEFI conceivable at all.
+
+### 2. Chinese can be displayed
+
+Four pieces go together:
+
+- **Font generator** `tools/mkfont.ps1` -- rasterises a TTF into a bitmap font
+  using Windows GDI (Cascadia Mono for ASCII, Noto Sans SC for Chinese; both are
+  SIL OFL 1.1, so they can be redistributed with the project).
+- **Font format TNDF v1** -- a 32-byte header, an index sorted by codepoint, and a
+  contiguous glyph area.
+- **Kernel-side loader** `lib/font.c` -- reads it from the ESP and does a binary search.
+- **Rendering** -- 8x16 for half-width, 16x16 for full-width, one uniform cell height of 16.
+
+It covers 21,427 glyphs: ASCII, CJK punctuation, kana, the CJK Unified Ideographs block,
+and full-width forms. About 836 KB.
+
+### 3. Batch primitives (API v2.4)
+
+Modelled on the Win32 console calls `WriteConsoleOutput` /
+`FillConsoleOutputCharacter` / `ScrollConsoleScreenBuffer` /
+`GetConsoleScreenBufferInfo`:
+
+```
+tnd_write_cells(x, y, w, h, cells, stride)
+tnd_fill(x, y, w, h, ch, attr)
+tnd_scroll(x, y, w, h, dy, ch, attr)
+tnd_screen(&sc)
+```
+
+**Why they are mandatory**: a program like EDIT redraws several hundred cells at a time,
+and one call per cell spends everything on overhead alone. These are not a luxury
+feature; they are the floor for performance.
+
+### 4. Timer (no IDT required)
+
+`ticks()` now returns **milliseconds since boot**.
+
+The key realisation: **reading a time base and waiting for an interrupt are two
+different things.** Reading the TSC is a couple of instructions, and costs nothing
+at all when it is never called; the only CPU-hungry approach is a polling loop, and
+that is not what we do. A periodic interrupt is what needs an IDT -- and that comes later.
+
+The frequency cannot simply be asked for, so it is calibrated against the firmware's
+`Stall`: Stall guarantees a delay of at least that long, so the TSC delta divided by
+the elapsed time is the frequency.
+
+The switch lives in the configuration files, and `config.sys` overrides `efidos.sys`:
+
+```
+efidos.sys    SET TNDDOS_TIMER=ON
+config.sys    SET TNDDOS_TIMER=OFF     ; uncomment to turn it off
+```
+
+When it is off, `ticks()` **honestly returns 0** rather than a plausible lie -- a fake
+clock is worse than no clock.
+
+### 5. Things fixed along the way
+
+- **EDIT's full-screen layout was wrong**: `api_cls` / `api_gotoxy` /
+  `api_cols` / `api_rows` bypassed the console service layer and called ConOut
+  directly, so EDIT was told 100x31 (the firmware's grid) instead of 160x50.
+- **SF scaling produced speckle**: glyphs were scaled vertically but not horizontally,
+  so a cell 9 pixels wide got an 8-pixel glyph and the rightmost column was never written.
+- **Scrolling was slow**: every scrolled line redrew all 8000 cells, each of them doing
+  a binary search. It is now one memory move plus a redraw of the last row only --
+  **boot is twice as fast.**
+- **`api_getattr` read a stale value**: the same trap.
+
+---
+
+## Measured
+
+```
+[log] font: loaded \EFI\TNDOS\FONTS\CJK16.FNT  cell=16x8/16  glyphs=21427
+[log] con_fb: grid=160x50 cell=8x16 scale=100%
+[log] timer: TSC 1998812 cycles/ms  (~1998 MHz)
+[log] batch.lines = 97
+```
+
+```
+C:\EFI\TNDOS>edit tndos.txt     <- full screen, Chinese displays
+C:\EFI\TNDOS>sf 1.5             <- scaling works
+C:\EFI\TNDOS>time               <- uptime: 12345 ms (12 s)
+```
+
+---
+
+## Known limitations (stated plainly, not hedged)
+
+- **One program at a time, ring 0, no memory isolation** -- a crashing program takes
+  the system down. This is not a bug, it is the current state.
+- **No `ExitBootServices`** -- the firmware's interrupt and exception handling is still
+  in place, which is why a crash still gives us a register dump.
+- **Chinese can be displayed but not typed.**
+- **The cursor does not blink** -- the timer exists, but blinking needs a periodic
+  action and that is not wired up yet.
+- **Only ever verified on QEMU + OVMF.**
+- **`autoexec.bat` writes to the real ESP on every boot** -- comment those lines out
+  before booting on real hardware.
+- **Font aesthetics** -- were you really counting on an AI for that???
+
+---
+
+## Next version
+
+IDT and exception handling (the first genuinely architecture-specific code, and a good
+moment to establish `src/arch/`), then our own FAT driver -- **without it there is no
+leaving UEFI.**
+
+The engineering conventions and the full feature list are in `CONTRIBUTING.md` and
+`TNDOS-目标清单.txt` in the repository.
+
+</details>
