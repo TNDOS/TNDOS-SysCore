@@ -55,17 +55,25 @@ $qi = Get-ChildItem 'C:\qemu' -Recurse -Filter 'qemu-img.exe' -ErrorAction Silen
 if (-not $qi) { throw 'qemu-img.exe not found under C:\qemu' }
 
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
-$out = Join-Path $Dist ("TNDDOS-$ver-x86_64.vhd")
-Remove-Item $out -Force -ErrorAction SilentlyContinue
+$out    = Join-Path $Dist ("TNDDOS-$ver-x86_64.vhd")
+# **同一个文件也写一份到 build\esp.vhd。**
+# 那个路径是手边最常打开的地方（VMware / QEMU 都指它），
+# 只放 dist/ 的话，人找的永远是那个没更新的旧文件。
+$stable = Join-Path $Build 'esp.vhd'
+Remove-Item $out    -Force -ErrorAction SilentlyContinue
+Remove-Item $stable -Force -ErrorAction SilentlyContinue
 
 Write-Host '--- qemu-img: raw FAT16 image -> VHD ---'
 & $qi.FullName convert -f raw -O vpc "$EspImg" "$out"
 if ($LASTEXITCODE -ne 0) { throw 'qemu-img convert failed' }
 if (-not (Test-Path $out)) { throw 'the VHD was not produced' }
+Copy-Item $out $stable -Force
+if (-not (Test-Path $stable)) { throw 'could not write build\\esp.vhd' }
 
 Write-Host ''
 Write-Host ("input   esp.img  " + (Get-Item $EspImg).Length + ' bytes  (MBR + type-0xEF + FAT16)')
 Write-Host ("output  vhd      " + (Get-Item $out).Length + ' bytes  (dynamic)')
 Write-Host "artifact: $out"
+Write-Host "also at : $stable   <- the one to open by hand"
 Write-Host 'sha256:'
 (Get-FileHash $out -Algorithm SHA256).Hash | ForEach-Object { Write-Host "  $_" }
