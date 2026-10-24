@@ -15,6 +15,18 @@ ISO                   通用发行物 —— 刻盘、虚拟机、Ventoy 都能�
 VHD                    Windows 下便捷使用 —— 双击挂载，不需要额外工具
 ```
 
+**VHD 用动态扩展模式**，标称容量 64 MB，实际按占用增长；打包收尾时压缩一次，
+把「分配过但全是零」的块还回去：
+
+```
+固定模式      67,109,376 字节   64 MB 全部实打实写出来
+动态扩展       6,311,936 字节   只分配真正写过的块 —— 小 10.6 倍
+```
+
+`compact vdisk` 只对动态扩展的 vdisk 有效，而且必须是分离或只读挂载状态 ——
+`tools/make-vhd.ps1` 里第二趟 diskpart 就是干这个的。
+下载的人不用为那 58 MB 空白付代价。
+
 </div>
 
 ## 这一版做了什么
@@ -253,6 +265,19 @@ multi-partition .img  the convenient form under Linux / BSD -- we write the
 VHD                   the convenient form under Windows -- double-click to mount,
                       no extra tooling
 ```
+
+**The VHD is dynamically expanding**: nominal capacity 64 MB, actual size grows
+with usage. The packaging step finishes with a compaction pass that returns the
+blocks which were allocated but are entirely zero:
+
+```
+fixed layout      67,109,376 bytes   64 MB written out in full
+dynamically sized  6,311,936 bytes   only the blocks actually written -- 10.6x smaller
+```
+
+`compact vdisk` only works on an expandable vdisk, and only while it is detached
+or attached read-only -- which is what the second diskpart pass in
+`tools/make-vhd.ps1` exists for. Nobody has to download 58 MB of empty space.
 
 </div>
 

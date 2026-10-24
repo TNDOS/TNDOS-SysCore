@@ -5,7 +5,15 @@
 # Same contents (GPT + ESP FAT32 + loader + kernel); a VHD is a container
 # Windows can mount by double-clicking, while a bare .img needs extra tools.
 #
-# Usage:   tools\make-vhd.ps1 [-SizeMB 64] [-NoBuild]
+# The VHD is DYNAMICALLY EXPANDING (diskpart type=expandable), so the file
+# starts near-empty and grows only as data is written. After the copy the
+# unused allocated blocks are reclaimed with `compact vdisk`, which is why
+# the shipped file is much smaller than the nominal 64 MB capacity.
+#
+# compact vdisk only works on an expandable VHD that is detached or attached
+# read-only -- hence the second, read-only diskpart pass below.
+#
+# Usage:   tools\make-vhd.ps1 [-SizeMB 64] [-NoBuild] [-NoCompact]
 # Output:  dist\TNDDOS-<version>-x86_64.vhd
 #
 # NOTE: this file must stay pure ASCII. A .ps1 that loses its UTF-8 BOM and
@@ -13,7 +21,8 @@
 # ============================================================================
 param(
     [int]$SizeMB = 64,
-    [switch]$NoBuild
+    [switch]$NoBuild,
+    [switch]$NoCompact
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,10 +52,10 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $out = Join-Path $Dist ("TNDDOS-$ver-x86_64.vhd")
 Remove-Item $out -Force -ErrorAction SilentlyContinue
 
-# --- create an empty fixed VHD, partition it, format FAT32, assign T: ---
+# --- create an EMPTY EXPANDABLE VHD, partition it, format FAT32, assign T: ---
 $dp1 = Join-Path $Build 'mkhd-create.txt'
 @(
-    "create vdisk file=`"$out`" maximum=$SizeMB type=fixed"
+    "create vdisk file=`"$out`" maximum=$SizeMB type=expandable"
     "select vdisk file=`"$out`""
     'attach vdisk'
     'create partition primary'
@@ -54,7 +63,7 @@ $dp1 = Join-Path $Build 'mkhd-create.txt'
     'assign letter=T'
     'exit'
 ) -join "`r`n" | Set-Content -Path $dp1 -Encoding ASCII
-Write-Host '--- diskpart: create + format ---'
+Write-Host '--- diskpart: create (expandable) + format ---'
 cmd /c "diskpart /s $dp1" | Out-Null
 Start-Sleep -Seconds 2
 
@@ -74,11 +83,34 @@ $dp2 = Join-Path $Build 'mkhd-detach.txt'
 cmd /c "diskpart /s $dp2" | Out-Null
 Start-Sleep -Seconds 2
 
+$sizeBefore = if (Test-Path $out) { (Get-Item $out).Length } else { 0 }
+Write-Host ('VHD after copy: ' + $sizeBefore + ' bytes')
+
+# --- reclaim the unused blocks: attach read-only, compact, detach ---
+if (-not $NoCompact) {
+    $dp3 = Join-Path $Build 'mkhd-compact.txt'
+    @(
+        "select vdisk file=`"$out`""
+        'attach vdisk readonly'
+        'compact vdisk'
+        'detach vdisk'
+        'exit'
+    ) -join "`r`n" | Set-Content -Path $dp3 -Encoding ASCII
+    Write-Host '--- diskpart: compact (reclaim unused blocks) ---'
+    cmd /c "diskpart /s $dp3" | Select-String -Pattern 'DiskPart|percent|completed' | ForEach-Object { Write-Host ('  ' + $_.Line.Trim()) }
+    Start-Sleep -Seconds 2
+}
+
 Remove-Item $dp1, $dp2 -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $Build 'mkhd-compact.txt') -Force -ErrorAction SilentlyContinue
 
 if (-not (Test-Path $out)) { throw 'the VHD was not produced' }
 $len = (Get-Item $out).Length
 Write-Host ""
+if ($sizeBefore -gt 0) {
+    $pct = [math]::Round(100.0 * $len / $sizeBefore, 1)
+    Write-Host ("compacted: $sizeBefore -> $len bytes (" + $pct + "%)")
+}
 Write-Host "release artifact: $out  ($len bytes)"
 Write-Host "sha256:"
 (Get-FileHash $out -Algorithm SHA256).Hash | ForEach-Object { Write-Host "  $_" }
