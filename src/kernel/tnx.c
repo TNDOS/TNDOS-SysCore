@@ -511,6 +511,36 @@ EFI_STATUS tnx_load(const char *path, int *outCode, int verbose) {
             t_memzero(dst + sec[i].FileSize, (UINTN)(sec[i].MemSize - sec[i].FileSize));
     }
 
+    /* **回读几个位置，确认"写进去的"和"读出来的"一致。**
+     *
+     * 起因：用 QEMU 的 pmemsave 抓 0x2800000 那段物理内存做快照，
+     * 发现 0x0F30 处是固件残留、加载之后都没变；而 0x1F30 处变了但内容不对。
+     * 两种可能：(a) 加载器没写那里 (b) 虚拟 0x2800000 和物理 0x2800000 不是一回事。
+     * 这几行直接回答：内核自己按虚拟地址读回来的值，和文件里的字节对不对得上。 */
+    /* **源 vs 目标逐点对比。**
+     *
+     *   file 缓冲区里的字节（也就是从磁盘读进来的原始数据）
+     *   映像里的字节（也就是拷贝之后、CPU 会执行的那份）
+     *
+     * 两者一致而内容错 -> 读盘没读对（FAT / VFS 那条路）
+     * 两者不一致       -> 拷贝没拷对（加载器本身）
+     * 两者都对而程序仍崩 -> 之后被踩了
+     *
+     * 这条链是唯一能把"文件系统的锅"和"加载器的锅"分开的办法。 */
+    {
+        UINT8 *src0 = (UINT8 *)file + sec[0].FileOffset;
+        log_kv_u64("tnx.sec0.filesize", sec[0].FileSize);
+        log_kv_u64("tnx.sec0.fileoff",  sec[0].FileOffset);
+        log_kv_u64("tnx.sec0.rva",      sec[0].RVA);
+
+        log_kv_u64("tnx.src.f30",  *(volatile UINT64 *)(UINTN)(src0 + 0x0F30));
+        log_kv_u64("tnx.dst.f30",  *(volatile UINT64 *)(UINTN)(imageBase + 0x0F30));
+        log_kv_u64("tnx.src.1f30", *(volatile UINT64 *)(UINTN)(src0 + 0x1F30));
+        log_kv_u64("tnx.dst.1f30", *(volatile UINT64 *)(UINTN)(imageBase + 0x1F30));
+        log_kv_u64("tnx.src.last", *(volatile UINT64 *)(UINTN)(src0 + sec[0].FileSize - 8));
+        log_kv_u64("tnx.dst.last", *(volatile UINT64 *)(UINTN)(imageBase + sec[0].FileSize - 8));
+    }
+
     kfree(file);
     file = 0;
 

@@ -297,6 +297,16 @@ static int fb_apply_scale(int pct) {
     gFb.scalePct = pct;
     gFb.x = gFb.y = 0;
     t_memzero(gFb.shadow, cols * rows * sizeof(FB_CELL));
+    /* **把影子缓冲的地址打出来。**
+     *
+     * 有一个很久没解的怪现象：程序窗口里的 .text 会被写成屏幕上的文字
+     *（快照里 0x2F30 出现 '===='，而代码段里根本没有这个字符串）。
+     * 最可能的原因是某个内核缓冲被分配到了 0x2800000..0x3000000 里 ——
+     * 窗口虽然开机就 pmm_reserve 了，但先确认一下实际地址再说。 */
+    log_puts("[log] con_fb: shadow @ ");
+    log_hex((UINT64)(UINTN)gFb.shadow);
+    log_puts("  bytes "); log_u64((UINT64)(cols * rows * (int)sizeof(FB_CELL)));
+    log_puts("\r\n");
     fb_clear();
     return 1;
 }
