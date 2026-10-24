@@ -628,7 +628,7 @@ void shell_exec_line(char *line) {
          * 不可逆的操作重复执行必须显式说明「这次没执行」，
          * 否则用户会以为第二次也生效了。 */
         if (gBsGone) {
-            con_puts("\r\n  已退出启动模式，本指令不再执行\r\n\r\n");
+            con_puts("\r\n  [EXITBOOT] already out of boot mode -- this command will not run again\r\n\r\n");
             return;
         }
         con_puts("\r\n  [EXITBOOT] ExitBootServices -- IRREVERSIBLE\r\n");
