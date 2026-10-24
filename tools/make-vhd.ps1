@@ -1,35 +1,36 @@
 ﻿# ============================================================================
-# make-vhd.ps1 -- build the release artifact as a VHD
+# make-vhd.ps1 -- wrap build/esp.img into the release artifact
 #
 # From 0.3.2-M4-SP2.5 on, Releases ship a .vhd instead of a raw .img.
-# Same contents (GPT + ESP FAT32 + loader + kernel); a VHD is a container
-# Windows can mount by double-clicking, while a bare .img needs extra tools.
 #
-# The VHD is DYNAMICALLY EXPANDING (diskpart type=expandable), so the file
-# starts near-empty and grows only as data is written. After the copy the
-# unused allocated blocks are reclaimed with `compact vdisk`, which is why
-# the shipped file is much smaller than the nominal 64 MB capacity.
+# The build already produces esp.img, which IS a complete bootable disk:
 #
-# compact vdisk only works on an expandable VHD that is detached or attached
-# read-only -- hence the second, read-only diskpart pass below.
+#     esp.img  =  MBR + one type-0xEF partition + FAT16 + \EFI tree
 #
-# Usage:   tools\make-vhd.ps1 [-SizeMB 64] [-NoBuild] [-NoCompact]
+# qemu-img -O vpc adds the VHD container and changes nothing else, so the
+# partition table, the FAT16 filesystem and the volume serial all survive.
+# The result is dynamic: only the used blocks are stored (4 MB, not 32 MB).
+#
+# **Do not use diskpart here.** An earlier version attached the VHD, let
+# Windows partition and format it, and copied the files in. That path needs
+# admin rights and fails silently without them -- no output, no drive letter,
+# files never copied, and the VM then boots a stale image while looking fine.
+# It also reformats as FAT32 and zeroes the volume serial.
+#
+# Usage:   tools\make-vhd.ps1 [-NoBuild]
 # Output:  dist\TNDDOS-<version>-x86_64.vhd
 #
-# NOTE: this file must stay pure ASCII. A .ps1 that loses its UTF-8 BOM and
-# contains non-ASCII text fails to parse, silently, with no useful message.
+# NOTE: this file must stay pure ASCII.
 # ============================================================================
 param(
-    [int]$SizeMB = 64,
-    [switch]$NoBuild,
-    [switch]$NoCompact
+    [switch]$NoBuild
 )
 
 $ErrorActionPreference = 'Stop'
-$Root  = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Build = Join-Path $Root 'build'
-$Dist  = Join-Path $Root 'dist'
-$EspDir = Join-Path $Build 'esp'
+$Root   = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$Build  = Join-Path $Root 'build'
+$Dist   = Join-Path $Root 'dist'
+$EspImg = Join-Path $Build 'esp.img'
 
 # version string, read from the kernel header so there is one source of truth
 $hdr = Get-Content (Join-Path $Root 'src\include\tnd.h') -Raw
@@ -47,70 +48,24 @@ if (-not $NoBuild) {
     & (Join-Path $Root 'tools\build-run.ps1') -NoRun *>&1 | Out-Null
 }
 
-if (-not (Test-Path $EspDir)) { throw "ESP staging dir missing: $EspDir" }
+if (-not (Test-Path $EspImg)) { throw "missing $EspImg -- run the build first" }
+
+$qi = Get-ChildItem 'C:\qemu' -Recurse -Filter 'qemu-img.exe' -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+if (-not $qi) { throw 'qemu-img.exe not found under C:\qemu' }
+
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $out = Join-Path $Dist ("TNDDOS-$ver-x86_64.vhd")
 Remove-Item $out -Force -ErrorAction SilentlyContinue
 
-# --- create an EMPTY EXPANDABLE VHD, partition it, format FAT32, assign T: ---
-$dp1 = Join-Path $Build 'mkhd-create.txt'
-@(
-    "create vdisk file=`"$out`" maximum=$SizeMB type=expandable"
-    "select vdisk file=`"$out`""
-    'attach vdisk'
-    'create partition primary'
-    'format fs=fat32 quick label=TNDDOS'
-    'assign letter=T'
-    'exit'
-) -join "`r`n" | Set-Content -Path $dp1 -Encoding ASCII
-Write-Host '--- diskpart: create (expandable) + format ---'
-cmd /c "diskpart /s $dp1" | Out-Null
-Start-Sleep -Seconds 2
-
-# --- copy the staged ESP into it ---
-if (-not (Test-Path 'T:\')) { throw 'drive T: did not appear -- diskpart failed' }
-Remove-Item 'T:\EFI' -Recurse -Force -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $EspDir 'EFI') 'T:\' -Recurse -Force
-Write-Host ('files on T: ' + (Get-ChildItem 'T:\' -Recurse -File | Measure-Object).Count)
-
-# --- detach ---
-$dp2 = Join-Path $Build 'mkhd-detach.txt'
-@(
-    "select vdisk file=`"$out`""
-    'detach vdisk'
-    'exit'
-) -join "`r`n" | Set-Content -Path $dp2 -Encoding ASCII
-cmd /c "diskpart /s $dp2" | Out-Null
-Start-Sleep -Seconds 2
-
-$sizeBefore = if (Test-Path $out) { (Get-Item $out).Length } else { 0 }
-Write-Host ('VHD after copy: ' + $sizeBefore + ' bytes')
-
-# --- reclaim the unused blocks: attach read-only, compact, detach ---
-if (-not $NoCompact) {
-    $dp3 = Join-Path $Build 'mkhd-compact.txt'
-    @(
-        "select vdisk file=`"$out`""
-        'attach vdisk readonly'
-        'compact vdisk'
-        'detach vdisk'
-        'exit'
-    ) -join "`r`n" | Set-Content -Path $dp3 -Encoding ASCII
-    Write-Host '--- diskpart: compact (reclaim unused blocks) ---'
-    cmd /c "diskpart /s $dp3" | Select-String -Pattern 'DiskPart|percent|completed' | ForEach-Object { Write-Host ('  ' + $_.Line.Trim()) }
-    Start-Sleep -Seconds 2
-}
-
-Remove-Item $dp1, $dp2 -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $Build 'mkhd-compact.txt') -Force -ErrorAction SilentlyContinue
-
+Write-Host '--- qemu-img: raw FAT16 image -> VHD ---'
+& $qi.FullName convert -f raw -O vpc "$EspImg" "$out"
+if ($LASTEXITCODE -ne 0) { throw 'qemu-img convert failed' }
 if (-not (Test-Path $out)) { throw 'the VHD was not produced' }
-$len = (Get-Item $out).Length
-Write-Host ""
-if ($sizeBefore -gt 0) {
-    $pct = [math]::Round(100.0 * $len / $sizeBefore, 1)
-    Write-Host ("compacted: $sizeBefore -> $len bytes (" + $pct + "%)")
-}
-Write-Host "release artifact: $out  ($len bytes)"
-Write-Host "sha256:"
+
+Write-Host ''
+Write-Host ("input   esp.img  " + (Get-Item $EspImg).Length + ' bytes  (MBR + type-0xEF + FAT16)')
+Write-Host ("output  vhd      " + (Get-Item $out).Length + ' bytes  (dynamic)')
+Write-Host "artifact: $out"
+Write-Host 'sha256:'
 (Get-FileHash $out -Algorithm SHA256).Hash | ForEach-Object { Write-Host "  $_" }
