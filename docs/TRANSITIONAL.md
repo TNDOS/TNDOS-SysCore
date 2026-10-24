@@ -104,7 +104,8 @@ reworked. It establishes the marking style.)
 ### 轮子**是过渡期代码** Wheels ARE transitional
 
 ```
-FatFs R0.16                    -> 脚手架，我们自己写出文件系统之后删
+FatFs R0.16                    -> **已删除**（0.3.2-M4-SP2.5）：它交出错数据，
+                                  换成了自研 FAT12/16/32。见 FATFS.md
 OpenBSD nvme.c / ahci.c / pciide.c  -> 脚手架，我们理解机制之后自己写
 ```
 
