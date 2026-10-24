@@ -266,6 +266,17 @@ int    t_time_on(void);
 UINT64 t_time_ms(void);
 
 int          font_load(const char *dosPath);
+
+/* **字体文件的读取钩子。**
+ *
+ * font.c 留在 LibSrc 里（引导器和内核都要编），所以它不能直接依赖内核的
+ * FAT 驱动。但字体是在**退出启动服务之后**才加载的（CONSOLE fb 在 autoexec
+ * 里跑），那时固件的 SimpleFileSystem 已经没了 —— 字读不到，中文就退回
+ * 内置的 8x12 点阵。
+ *
+ * 所以留一个函数指针：谁有文件系统谁就把它接上。内核在 vfs_init 里接
+ * fat_read_alloc。约定和 EFI 一致：返回 0 = 成功。 */
+extern int (*t_font_read_hook)(const char *path, void **out, UINTN *len);
 int          font_ready(void);
 UINTN        font_cell_h(void);
 UINTN        font_narrow_w(void);

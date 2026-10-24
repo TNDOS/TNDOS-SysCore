@@ -36,6 +36,11 @@ const TND_MODULE_DEF gModVfs = { "vfs", "virtual file system / DOS path + drive 
 const char *vfs_efi_error(EFI_STATUS s) { return t_status_str(s); }
 
 int vfs_init(void) {
+    /* **把字体读取接到自己的 FAT 驱动上。**
+     * 字体是在退出启动服务之后加载的，那时固件的文件系统已经没了；
+     * 不接这个钩子，中文会静默退回内置的 8x12 点阵。 */
+    t_font_read_hook = fat_read_alloc;
+
     if (!gEnv.Root) { log_kv("vfs", "no root handle, mount failed"); return 0; }
     gDrives[0].used = 1;
     gDrives[0].letter = 'C';

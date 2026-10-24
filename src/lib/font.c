@@ -50,6 +50,8 @@ static UINT16 rd16(const UINT8 *p) { return (UINT16)((UINT32)p[0] | ((UINT32)p[1
 
 /* 加载字体。path 走 VFS（DOS 路径语义）。
  * 失败只记日志、返回 0 —— 调用方会退回内嵌的 8x12 字体，控制台照样能用。 */
+int (*t_font_read_hook)(const char *path, void **out, UINTN *len) = 0;
+
 int font_load(const char *path) {
     UINT8  *buf;
     UINTN   len = 0;
@@ -61,9 +63,19 @@ int font_load(const char *path) {
     /* 用 t_read_file_alloc 而不是 vfs_read_all + kmalloc：
      * 它在 file.c 里，**引导器和内核两个构建都有** —— 这样本文件可以留在
      * 共用的 LibSrc 里。代价是路径按 UEFI 的来，不走 VFS 的 DOS 语义。 */
-    if (EFI_ERROR(t_read_file_alloc(path, (void **)&buf, &len)) || !buf || len < 32) {
-        log_puts("[log] font: cannot read "); log_puts(path); log_puts("\r\n");
-        return 0;
+    /* **先问钩子。** 内核会把 t_font_read_hook 接到自己的 FAT 驱动上 ——
+     * 而固件那条路在 ExitBootServices 之后已经不存在了。两个都不成才失败。 */
+    {
+        int hooked = 0;
+        if (t_font_read_hook) {
+            int rc = t_font_read_hook(path, (void **)&buf, &len);
+            if (rc == 0 && buf && len >= 32) hooked = 1;
+            else { buf = 0; len = 0; }
+        }
+        if (!hooked && (EFI_ERROR(t_read_file_alloc(path, (void **)&buf, &len)) || !buf || len < 32)) {
+            log_puts("[log] font: cannot read "); log_puts(path); log_puts("\r\n");
+            return 0;
+        }
     }
 
     if (buf[0] != 'T' || buf[1] != 'N' || buf[2] != 'D' || buf[3] != 'F') {
