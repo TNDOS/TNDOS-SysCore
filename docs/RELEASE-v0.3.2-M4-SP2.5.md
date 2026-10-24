@@ -114,6 +114,20 @@ FAT 表    12 位紧密打包（含跨扇区）、16 位、32 位；读和写都
 读写合成一个函数 `nvme_rw(opcode, ...)` —— 读 `0x02`、写 `0x01`，
 其余字段完全一样。两个函数各抄一遍的话，改一处忘一处是迟早的事。
 
+**这个驱动是自己写的，没有搬 OpenBSD 的 `nvme.c`。** 那个文件确实被引入过
+（`third_party/openbsd/`，ISC，56 KB），但从来没接进构建，也一个字符都没抄：
+
+```
+我们的 drivers/nvme/nvme.c    29,240 字节
+OpenBSD 的 nvme.c             56,134 字节
+两边 40 字节窗口的重合数        0
+```
+
+六个驱动（ahci / nvme / ps2 / say / usb / vga）对三个 OpenBSD 文件的
+40 字节窗口重合数**全部是 0**。抄了再改写做不到这个结果。
+保留那三个文件只是为了读实现思路；源码里一条第三方版权声明都没有，
+这本身就是「没用」的证据。
+
 一个必须记住的约束：`nvme_rw` 只填 PRP1（PRP2 恒为 0），
 所以一次命令的数据**必须落在同一个 4 KB 页内**。文件系统的缓冲不保证页对齐，
 所以驱动层按 512 字节拆开循环 —— 单个扇区永远在页内。
@@ -232,12 +246,15 @@ C:\EFI\TNDOS>constest
 主项目 MIT。第三方组件保留各自的许可证，逐条登记在 `docs/THIRD-PARTY.md`：
 
 ```
-OpenBSD nvme.c     ISC   （已引入，未接入）
-OpenBSD ahci.c     ISC   （已引入，未接入）
-OpenBSD pciide.c   ISC   （已引入，未接入）
+OpenBSD nvme.c     ISC   已获取，未参与构建，未复制任何代码
+OpenBSD ahci.c     ISC   同上
+OpenBSD pciide.c   ISC   同上
 =====================================================================
 FatFs R0.16        已从本版本移除 —— 不再分发，许可义务随之结束
 ```
+
+那三个文件随仓库分发，所以这条 ISC 登记必须留着（原文件头原样保留）；
+但驱动全是自己写的 —— 比对数据见上面 NVMe 那一节和 `docs/THIRD-PARTY.md`。
 
 版权声明原样保留，一个字未改。
 
@@ -394,6 +411,22 @@ Read and write share one function, `nvme_rw(opcode, ...)`: read is `0x02`, write
 is `0x01`, every other field is identical. Two copies of that code would drift
 the first time one of them is touched.
 
+**This driver is written from scratch; OpenBSD's `nvme.c` was not copied.** That
+file was vendored once (`third_party/openbsd/`, ISC, 56 KB) but was never wired
+into any build and not a single character was taken from it:
+
+```
+our drivers/nvme/nvme.c       29,240 bytes
+OpenBSD's nvme.c              56,134 bytes
+shared 40-byte windows              0
+```
+
+Across all six drivers (ahci / nvme / ps2 / say / usb / vga) the count of shared
+40-byte windows against the three OpenBSD files is **zero**. You cannot reach that
+result by copying and then rewriting. Those files are kept only to read how the
+enumeration is done; there is not one third-party notice anywhere in the driver
+sources, which is itself the evidence that nothing was used.
+
 One constraint worth remembering: `nvme_rw` fills PRP1 only (PRP2 is always 0),
 so the data of a single command **must stay inside one 4 KB page**. File system
 buffers are not page aligned, so the driver splits work into 512-byte chunks --
@@ -533,13 +566,17 @@ The project itself is MIT. Third-party components keep their own licences, all
 listed in `docs/THIRD-PARTY.md`:
 
 ```
-OpenBSD nvme.c     ISC   (imported, not wired in)
-OpenBSD ahci.c     ISC   (imported, not wired in)
-OpenBSD pciide.c   ISC   (imported, not wired in)
+OpenBSD nvme.c     ISC   vendored, not built, no code copied
+OpenBSD ahci.c     ISC   same
+OpenBSD pciide.c   ISC   same
 =====================================================================
 FatFs R0.16        removed in this version -- no longer distributed, so the
                    licence obligation ends with it
 ```
+
+Those three files ship with the repository, so this ISC entry has to stay (their
+original headers are untouched); but every driver is ours -- the comparison numbers
+are in the NVMe section above and in `docs/THIRD-PARTY.md`.
 
 Copyright notices are kept verbatim, not one word changed.
 

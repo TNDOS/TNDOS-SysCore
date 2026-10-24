@@ -34,30 +34,41 @@
 
 ## 计划引入 Planned
 
-### NVMe —— 优先 OpenBSD 的 nvme.c
+### OpenBSD 驱动源码 —— 已获取，**未采用**
+
+三个文件躺在 `repos/TNDOS-SDK/third_party/openbsd/` 里：
 
 ```
-许可证  ISC 风格宽松（文件头直接列出条件）
-理由    纯 C、通用、不绑厂商，而且许可证是我们要的
-用法    **搬枚举和命令提交的逻辑**，不搬它的 OS 抽象层
-        （bus_dma / mutex / 中断这些要换成我们自己的）
-状态    待获取
+nvme.c      56,134 字节      ISC
+ahci.c      89,996 字节      ISC
+pciide.c   263,497 字节      ISC
 ```
 
-### AHCI —— 优先 OpenBSD 的 ahci.c
+**它们不参与任何构建**，六个驱动（ahci / nvme / ps2 / say / usb / vga）都是
+本项目自己写的。这不是「用了没写清楚」，是**确实没用**：
 
 ```
-同上。同许可证系列，同一套移植策略。
-状态    待获取
+驱动      字节     与三个 OpenBSD 文件的 40 字节窗口重合数
+ahci    14,449    ahci.c=0  nvme.c=0  pciide.c=0
+nvme    29,240    ahci.c=0  nvme.c=0  pciide.c=0
+ps2     17,161    ahci.c=0  nvme.c=0  pciide.c=0
+say      3,760    ahci.c=0  nvme.c=0  pciide.c=0
+usb     52,021    ahci.c=0  nvme.c=0  pciide.c=0
+vga      8,397    ahci.c=0  nvme.c=0  pciide.c=0
 ```
 
-### IDE(PATA) —— 优先 OpenBSD 的 wdc.c / pciide.c
+40 字节窗口零重合 —— 抄了再改写是做不到这一点的。
+
+保留这三个文件只是为了**读它的实现思路**（怎么枚举、怎么等控制器就绪、
+命令怎么排布）。照抄一旦发生，ISC 要求保留它的版权声明 —— 现在源码里
+一条第三方声明都没有，这本身就是「没用」的证据。
+
+**结论：许可证义务只在我们「分发」它们时产生。它们现在随仓库分发，
+所以 THIRD-PARTY 里必须留着这条 ISC 登记**，但要说清未采用。
 
 ```
-**这是 QEMU 的刚需，不是实体机的刚需。**
-（-machine pc 用的是 PIIX IDE；q35 是 AHCI）
-作者的原话：「IDE 也是 VM 刚需，不是实体机刚需」
-状态    待获取
+状态    已获取，未参与构建，未复制任何代码
+许可证  ISC（原文件头原样保留，未改动）
 ```
 
 ### EDK2 —— 只做参考，不搬代码
