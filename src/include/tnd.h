@@ -156,6 +156,7 @@ int  fat_rename(const char *from, const char *to);
 int  fat_copy(const char *from, const char *to);
 int  fat_ready(void);
 int  fat_mount_any(void);   /* 幂等：没挂就找一个块设备挂上 */
+int  fat_stat(const char *path, UINT32 *sizeOut, UINT32 *attrOut);
 
 /* 目录枚举：取 dirPath 里的第 index 项（8.3 名字）。
  * 给 api.c 的 findfirst/findnext 用 —— 按序号取，调用方自己递增，

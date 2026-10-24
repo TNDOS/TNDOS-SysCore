@@ -588,6 +588,15 @@ int fat_read_text(const char *path, char *buf, UINTN cap, UINTN *outLen) {
     return 0;
 }
 
+int fat_stat(const char *path, UINT32 *sizeOut, UINT32 *attrOut) {
+    FAT_DIRENT e;
+    if (!gMounted) return -1;
+    if (!path_lookup(path, &e, 0, 0, 0, 0)) return -1;
+    if (sizeOut) *sizeOut = e.FileSize;
+    if (attrOut) *attrOut = (e.Attr & ATTR_DIR) ? TND_ATTR_DIR : 0;
+    return 0;
+}
+
 int fat_exists(const char *path) {
     char buf[TND_MAX_PATH];
     FAT_DIRENT e;

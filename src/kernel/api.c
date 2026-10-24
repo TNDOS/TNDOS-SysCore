@@ -27,6 +27,18 @@ typedef struct {
     char               pattern[TND_NAME_MAX];   /* FD_DIR：匹配模式 */
     UINT8             *infoBuf;                 /* FD_DIR：目录项缓冲 */
     UINTN              infoSize;
+
+    /* **内存落地的文件。**
+     *
+     * FAT 那条路上的文件打开时整个读进堆，之后 read/seek 都在内存里做。
+     * 为什么不按簇流式读：那要维护"当前簇 + 簇内偏移 + 链上位置"三个状态，
+     * 而 DOS 程序绝大多数是"打开读完关掉"。用一个缓冲换掉那个状态机，
+     * 代码少一半，出错机会也少一半。
+     *
+     * 代价是大文件占内存 —— 对 TNX 程序和配置文件这个量级完全可接受。 */
+    UINT8             *mem;
+    UINTN              memLen;
+    UINTN              memPos;
 } TND_FD;
 
 static TND_FD gFd[TND_MAX_FDS];
@@ -44,6 +56,9 @@ static void fd_reset(int fd) {
     if (fd < 0 || fd >= TND_MAX_FDS) return;
     if (gFd[fd].f && gFd[fd].kind != FD_CONSOLE) { gFd[fd].f->Close(gFd[fd].f); gFd[fd].f = 0; }
     if (gFd[fd].infoBuf) { gEnv.BS->FreePool(gFd[fd].infoBuf); gFd[fd].infoBuf = 0; }
+    if (gFd[fd].mem) { kfree(gFd[fd].mem); gFd[fd].mem = 0; }
+    gFd[fd].memLen = 0;
+    gFd[fd].memPos = 0;
     gFd[fd].kind = FD_FREE;
     gFd[fd].infoSize = 0;
     gFd[fd].pattern[0] = 0;
@@ -122,6 +137,28 @@ static TND_ABI int api_open(const char *path, int flags) {
     fd = fd_alloc();
     if (fd < 0) return -1;
 
+    /* **能走 FAT 就走 FAT。**
+     * 固件那个 SimpleFileSystem 在 ExitBootServices 之后就不存在了，
+     * 而 TNX 程序全是在那之后跑的 —— 所以这条必须优先。 */
+    /* 判只读不能写成 flags & (WRONLY|RDWR)：TND_O_RDWR 是 0x0003，
+     * 它包含 TND_O_RDONLY 的 0x0001，于是 flags=RDONLY 时掩码非零，
+     * 条件永远不成立，FAT 分支一次都进不去。
+     * 低两位才是模式（1=只读 2=写 3=读写），所以拿它整体比。 */
+    if (fat_mount_any() &&
+        (flags & TND_O_RDWR) == TND_O_RDONLY &&
+        !(flags & TND_O_CREATE)) {
+        void *mem = 0;
+        UINTN len = 0;
+        if (fat_read_alloc(path, &mem, &len) == 0) {
+            gFd[fd].kind   = FD_FILE;
+            gFd[fd].f      = 0;
+            gFd[fd].mem    = (UINT8 *)mem;
+            gFd[fd].memLen = len;
+            gFd[fd].memPos = 0;
+            return fd;
+        }
+    }
+
     if (flags & TND_O_CREATE) {
         s = vfs_create(path, &f);
         if (!EFI_ERROR(s) && f && (flags & TND_O_TRUNC)) vfs_truncate(f);
@@ -157,8 +194,20 @@ static TND_ABI tnd_i64 api_read(int fd, void *buf, tnd_i64 count) {
         *(char *)buf = (char)c;
         return 1;
     }
-    if (e->kind != FD_FILE || !e->f) return -1;
+    if (e->kind != FD_FILE) return -1;
 
+    /* 内存落地的文件 */
+    if (e->mem) {
+        UINTN n;
+        if (e->memPos >= e->memLen) return 0;
+        n = e->memLen - e->memPos;
+        if (n > (UINTN)count) n = (UINTN)count;
+        t_memcpy(buf, e->mem + e->memPos, n);
+        e->memPos += n;
+        return (tnd_i64)n;
+    }
+
+    if (!e->f) return -1;
     want = (UINTN)count;
     s = e->f->Read(e->f, &want, buf);
     if (EFI_ERROR(s)) return -1;
@@ -189,7 +238,19 @@ static TND_ABI tnd_i64 api_seek(int fd, tnd_i64 offset, int whence) {
 
     if (fd < 0 || fd >= TND_MAX_FDS) return -1;
     e = &gFd[fd];
-    if (e->kind != FD_FILE || !e->f) return -1;
+    if (e->kind != FD_FILE) return -1;
+
+    if (e->mem) {
+        UINT64 np = 0;
+        if (whence == TND_SEEK_SET)      np = (UINT64)offset;
+        else if (whence == TND_SEEK_CUR) np = (UINT64)e->memPos + (UINT64)offset;
+        else                             np = (UINT64)e->memLen + (UINT64)offset;
+        if (np > (UINT64)e->memLen) np = (UINT64)e->memLen;
+        e->memPos = (UINTN)np;
+        return (tnd_i64)np;
+    }
+
+    if (!e->f) return -1;
 
     if (whence == TND_SEEK_SET) {
         pos = (UINT64)offset;
@@ -229,6 +290,18 @@ static TND_ABI int api_stat(const char *path, TND_STAT *st) {
 
     if (!st) return -1;
     t_memzero(st, sizeof(*st));
+
+    /* **先走 FAT。** 固件那个 SFS 在退出之后没了，而这个函数是被
+     * TNX 程序调的 —— 那时候早就退出了。 */
+    if (fat_mount_any()) {
+        UINT32 sz2 = 0, at2 = 0;
+        if (fat_stat(path, &sz2, &at2) == 0) {
+            st->Size = (tnd_u32)sz2;
+            st->Attr = at2;
+            return 0;
+        }
+    }
+
     if (EFI_ERROR(vfs_open(path, 0, &f)) || !f) return -1;
     if (EFI_ERROR(f->GetInfo(f, &gEfiFileInfoGuid, &sz, info))) { f->Close(f); return -1; }
     f->Close(f);
