@@ -258,6 +258,7 @@ $TnxUnits = @(
     @{ Name = 'hello';  Src = (Join-Path $SDK 'examples\hello\hello.c') },
     @{ Name = 'stress'; Src = (Join-Path $StressDir 'stress.c') },
     @{ Name = 'udtest'; Src = (Join-Path $SDK 'examples\udtest\udtest.c') },
+    @{ Name = 'constest'; Src = (Join-Path $SDK 'examples\constest\constest.c') },
     @{ Name = 'md5';    Src = (Join-Path $StressSrc 'md5.c') },
     @{ Name = 'shim';   Src = (Join-Path $StressSrc 'shim.c') },
     @{ Name = 'aes';    Src = (Join-Path $StressSrc 'aes.c') },
@@ -280,7 +281,8 @@ if (-not (Test-Path $lld)) { throw ("找不到 ld.lld.exe：" + $lld) }
 $TnxPrograms = @(
     @{ Elf = 'hello';  Out = 'HELLO.TNX';  Objs = @('tndrt','hello') },
     @{ Elf = 'stress'; Out = 'STRESS.TNX'; Objs = @('tndrt','stress','md5','shim','aes','puff') },
-    @{ Elf = 'udtest'; Out = 'UDTEST.TNX'; Objs = @('tndrt','udtest') }
+    @{ Elf = 'udtest'; Out = 'UDTEST.TNX'; Objs = @('tndrt','udtest') },
+    @{ Elf = 'constest'; Out = 'CONSTEST.TNX'; Objs = @('tndrt','constest') }
 )
 foreach ($p in $TnxPrograms) {
     $objs = @()
